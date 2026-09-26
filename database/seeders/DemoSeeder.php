@@ -41,7 +41,10 @@ class DemoSeeder extends Seeder
 
     public function run(): void
     {
-        abort_if(app()->isProduction(), 403, 'Demo data must not be seeded in production.');
+        // Blocked in production by default - this is fake data for 22 customers, a month of
+        // jobs, cash closes, etc. Set ALLOW_DEMO_SEED=true (once, then unset it) to let a
+        // client-facing demo tenant be seeded deliberately.
+        abort_if(app()->isProduction() && ! env('ALLOW_DEMO_SEED'), 403, 'Demo data must not be seeded in production. Set ALLOW_DEMO_SEED=true to override once.');
         config(['queue.default' => 'sync']);
         mt_srand(42);
         $this->today = Carbon::now('Asia/Kolkata')->startOfDay()->utc();
