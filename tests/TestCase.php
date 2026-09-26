@@ -75,6 +75,18 @@ abstract class TestCase extends BaseTestCase
         return $this;
     }
 
+    /**
+     * The test container is shared across requests within a test, so a guard keeps the
+     * user it resolved. Real requests each get a fresh one - call this between requests
+     * that are meant to be made by different users.
+     */
+    protected function forgetGuards(): static
+    {
+        $this->app['auth']->forgetGuards();
+
+        return $this;
+    }
+
     protected function makeCustomer(Tenant $tenant, array $attributes = []): Customer
     {
         return $this->inTenant($tenant, function () use ($attributes) {

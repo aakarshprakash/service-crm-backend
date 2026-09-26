@@ -44,10 +44,47 @@ class AuthTest extends TestCase
         $this->withHeaders($this->spa)->postJson('/api/v1/auth/login', ['email' => $admin->email, 'password' => self::PASSWORD])->assertStatus(429);
     }
 
-    public function test_session_login_without_spa_origin_is_refused_cleanly(): void
+    public function test_login_without_spa_origin_returns_a_usable_bearer_token(): void
     {
         ['admin' => $admin] = $this->makeTenant();
-        $this->postJson('/api/v1/auth/login', ['email' => $admin->email, 'password' => self::PASSWORD])->assertStatus(400);
+
+        // A web app on another domain can't use a cookie session - browsers block
+        // third-party cookies - so login has to work statelessly and hand back a token.
+        $token = $this->postJson('/api/v1/auth/login', ['email' => $admin->email, 'password' => self::PASSWORD])
+            ->assertOk()->json('data.token');
+
+        $this->assertNotEmpty($token);
+        $this->withToken($token)->getJson('/api/v1/auth/me')->assertOk()->assertJsonPath('data.user.email', $admin->email);
+    }
+
+    public function test_token_client_can_impersonate_a_tenant_and_return(): void
+    {
+        $this->seed();
+        ['tenant' => $tenant, 'admin' => $admin] = $this->makeTenant('beta');
+        $super = User::where('role', 'super_admin')->first();
+        $superToken = $super->createToken('web')->plainTextToken;
+
+        // Impersonation swaps identity via the session when there is one; a token client
+        // gets a replacement token instead.
+        $asAdmin = $this->withToken($superToken)->postJson("/api/v1/admin/tenants/{$tenant->id}/impersonate")
+            ->assertOk()->assertJsonPath('data.user.email', $admin->email)->json('data.token');
+
+        $this->assertNotEmpty($asAdmin);
+        $this->forgetGuards();
+        $this->withToken($asAdmin)->getJson('/api/v1/auth/me')
+            ->assertOk()->assertJsonPath('data.user.email', $admin->email)->assertJsonPath('data.user.impersonating', true);
+
+        $this->forgetGuards();
+        $back = $this->withToken($asAdmin)->postJson('/api/v1/impersonation/stop')
+            ->assertOk()->assertJsonPath('data.user.email', $super->email)->json('data.token');
+
+        $this->forgetGuards();
+        $this->withToken($back)->getJson('/api/v1/auth/me')
+            ->assertOk()->assertJsonPath('data.user.impersonating', false);
+
+        // The impersonation token is revoked once it has been handed back.
+        $this->forgetGuards();
+        $this->withToken($asAdmin)->getJson('/api/v1/auth/me')->assertUnauthorized();
     }
 
     public function test_technician_gets_token_for_mobile_app(): void

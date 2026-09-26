@@ -26,12 +26,6 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('v1')->group(function () {
 
     // ---- Public -----------------------------------------------------------
-    // Hands the CSRF token to the frontend in the response body rather than only
-    // via the XSRF-TOKEN cookie, since JS can't read a cookie set by a different
-    // root domain (cross-site SPA deployments, e.g. Cloudflare Pages + a separate
-    // API host). The session cookie itself still travels automatically.
-    Route::get('csrf-token', fn () => response()->json(['token' => csrf_token()]));
-
     Route::middleware('throttle:public')->group(function () {
         Route::get('plans', [AuthController::class, 'plans']);
         Route::get('portal/company/{slug}', [AuthController::class, 'portalCompany'])->where('slug', '[a-z0-9-]+');

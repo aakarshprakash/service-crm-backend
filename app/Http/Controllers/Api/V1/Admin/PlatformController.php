@@ -13,6 +13,7 @@ use App\Models\TenantSubscription;
 use App\Models\User;
 use App\Services\TenantProvisioningService;
 use App\Support\Audit;
+use App\Support\Impersonation;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password as PasswordRule;
 use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\PersonalAccessToken;
 
 /**
  * Super Admin panel (§5.1). No tenant business data is exposed – only counts.
@@ -179,29 +181,52 @@ class PlatformController extends Controller
         if (! $admin) {
             throw ValidationException::withMessages(['tenant' => 'This tenant has no active admin to impersonate.']);
         }
-        abort_unless($request->hasSession(), 400, 'Impersonation is only available in the web app.');
-
         $superAdmin = $request->user();
         Audit::log('impersonation.started', $admin, ['by' => $superAdmin->email], $tenantId);
-        Auth::guard('web')->login($admin);
-        $request->session()->regenerate();
-        $request->session()->put('impersonator_id', $superAdmin->id);
 
-        return $this->ok(['user' => AuthController::profileFor($admin)], "You are now signed in as {$admin->name}.");
+        $payload = ['user' => AuthController::profileFor($admin)];
+
+        if ($request->hasSession()) {
+            Auth::guard('web')->login($admin);
+            $request->session()->regenerate();
+            $request->session()->put('impersonator_id', $superAdmin->id);
+        } else {
+            $payload['token'] = $this->swapToken($request, $admin, Impersonation::tokenName($superAdmin->id));
+        }
+
+        return $this->ok($payload, "You are now signed in as {$admin->name}.");
     }
 
     public function stopImpersonating(Request $request): JsonResponse
     {
-        $impersonatorId = $request->session()->get('impersonator_id');
+        $impersonatorId = Impersonation::id($request);
         $original = $impersonatorId ? User::where('role', Role::SuperAdmin->value)->find($impersonatorId) : null;
         abort_unless($original, 403);
 
         Audit::log('impersonation.ended', $request->user(), ['by' => $original->email], $request->user()->tenant_id);
-        $request->session()->forget('impersonator_id');
-        Auth::guard('web')->login($original);
-        $request->session()->regenerate();
 
-        return $this->ok(['user' => AuthController::profileFor($original)]);
+        $payload = ['user' => AuthController::profileFor($original)];
+
+        if ($request->hasSession()) {
+            $request->session()->forget('impersonator_id');
+            Auth::guard('web')->login($original);
+            $request->session()->regenerate();
+        } else {
+            $payload['token'] = $this->swapToken($request, $original, 'web');
+        }
+
+        return $this->ok($payload);
+    }
+
+    /** Revokes the caller's token and issues one for $user, so the client swaps identity. */
+    private function swapToken(Request $request, User $user, string $name): string
+    {
+        $current = $request->user()->currentAccessToken();
+        if ($current instanceof PersonalAccessToken) {
+            $current->delete();
+        }
+
+        return $user->createToken($name, ['*'], now()->addDay())->plainTextToken;
     }
 
     public function auditLogs(Request $request): JsonResponse

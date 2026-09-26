@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\OtpService;
 use App\Services\TenantProvisioningService;
 use App\Support\Audit;
+use App\Support\Impersonation;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,6 +28,9 @@ use PragmaRX\Google2FA\Google2FA;
 
 class AuthController extends Controller
 {
+    /** Lifetime of a web app bearer token. */
+    private const WEB_TOKEN_DAYS = 30;
+
     /** Public: active subscription plans for the sign-up page. */
     public function plans(): JsonResponse
     {
@@ -46,18 +50,15 @@ class AuthController extends Controller
             'plan_id' => ['nullable', 'integer', 'exists:subscription_plans,id'],
         ], ['slug.regex' => 'Use lowercase letters, numbers and single hyphens only.']);
 
-        $this->ensureSession($request);
         ['tenant' => $tenant, 'admin' => $admin] = $provisioning->provision($data);
         Audit::log('tenant.registered', $tenant, [], $tenant->id);
 
-        $this->startSession($request, $admin);
-
-        return $this->created(['user' => $this->profile($admin->fresh())], 'Your account is ready. Your free trial has started.');
+        return $this->created($this->authPayload($request, $admin->fresh()), 'Your account is ready. Your free trial has started.');
     }
 
     /**
-     * Web (SPA cookie session) login for staff and super admins. Mobile clients use
-     * POST /auth/token instead.
+     * Web app login for staff and super admins, covering every role and the 2FA step.
+     * Mobile clients use the narrower POST /auth/token instead.
      */
     public function login(Request $request, Google2FA $google2fa): JsonResponse
     {
@@ -66,7 +67,6 @@ class AuthController extends Controller
             'password' => ['required', 'string', 'max:200'],
             'code' => ['nullable', 'string', 'max:10'],
         ]);
-        $this->ensureSession($request);
 
         $user = $this->attempt(strtolower($credentials['email']), $credentials['password']);
 
@@ -79,11 +79,10 @@ class AuthController extends Controller
             }
         }
 
-        $this->startSession($request, $user);
         $user->forceFill(['last_login_at' => now()])->saveQuietly();
         Audit::log('auth.login', $user, [], $user->tenant_id);
 
-        return $this->ok(['user' => $this->profile($user)]);
+        return $this->ok($this->authPayload($request, $user));
     }
 
     /** Android / API clients: email or phone + password → Sanctum personal access token. */
@@ -315,24 +314,27 @@ class AuthController extends Controller
             return $this->ok(['token' => $token->plainTextToken, 'user' => $this->profile($user)]);
         }
 
-        $this->ensureSession($request);
-        $this->startSession($request, $user);
-
-        return $this->ok(['user' => $this->profile($user)]);
+        return $this->ok($this->authPayload($request, $user));
     }
 
-    /** Session endpoints need the SPA cookie flow; API clients must use token endpoints. */
-    private function ensureSession(Request $request): void
+    /**
+     * Signs a freshly authenticated user in and builds the response body.
+     *
+     * A bearer token is always issued: the web app is commonly served from a different
+     * domain than the API (e.g. a static host in front of this backend), and browsers
+     * block third-party cookies, so a cookie session can't be relied on. The session is
+     * still started when the request has one, which keeps same-origin deployments working.
+     */
+    private function authPayload(Request $request, User $user): array
     {
-        if (! $request->hasSession()) {
-            abort(response()->json(['message' => 'Session login is for the web app. API clients should use POST /api/v1/auth/token.'], 400));
+        if ($request->hasSession()) {
+            Auth::guard('web')->login($user);
+            $request->session()->regenerate(); // prevents session fixation
         }
-    }
 
-    private function startSession(Request $request, User $user): void
-    {
-        Auth::guard('web')->login($user);
-        $request->session()->regenerate(); // prevents session fixation
+        $token = $user->createToken('web', ['*'], now()->addDays(self::WEB_TOKEN_DAYS));
+
+        return ['token' => $token->plainTextToken, 'user' => $this->profile($user)];
     }
 
     /** FCM token registration for push (§9.4). */
@@ -412,7 +414,7 @@ class AuthController extends Controller
             'punched_at' => $user->punched_at,
             'two_factor_enabled' => $user->hasTwoFactor(),
             'abilities' => $user->abilities(),
-            'impersonating' => request()->hasSession() && request()->session()->has('impersonator_id'),
+            'impersonating' => Impersonation::id() !== null,
             'tenant' => $tenant ? [
                 'id' => $tenant->id,
                 'name' => $tenant->name,

@@ -15,7 +15,7 @@ class Audit
         AuditLog::create([
             'tenant_id' => $tenantId ?? $model?->tenant_id ?? app(TenantContext::class)->id(),
             'user_id' => $user?->id,
-            'impersonator_id' => $request?->hasSession() ? $request->session()->get('impersonator_id') : null,
+            'impersonator_id' => $request ? Impersonation::id($request) : null,
             'action' => $action,
             'model' => $model ? class_basename($model) : null,
             'model_id' => $model?->getKey(),
