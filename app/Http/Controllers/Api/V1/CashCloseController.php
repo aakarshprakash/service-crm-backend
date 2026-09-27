@@ -67,7 +67,7 @@ class CashCloseController extends Controller
 
     public function show(Request $request, int $id): JsonResponse
     {
-        $close = CashClose::with(['technician:id,name,phone', 'branch:id,name', 'verifier:id,name', 'deposits.recorder:id,name'])->findOrFail($id);
+        $close = CashClose::with(['technician:id,tenant_id,name,phone', 'branch:id,name', 'verifier:id,name', 'deposits.recorder:id,name'])->findOrFail($id);
         if ($request->user()->isTechnician() && $close->technician_id !== $request->user()->id) {
             abort(404);
         }

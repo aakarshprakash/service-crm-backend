@@ -145,6 +145,19 @@ class CashCloseTest extends TestCase
         $this->assertTrue($this->inTenant($this->tenant, fn () => Invoice::first()->is_credit));
     }
 
+    public function test_admin_can_view_a_single_cash_close(): void
+    {
+        $this->collect(100000, 'cash', 100000);
+        $closeId = $this->actingAsUser($this->tech)
+            ->postJson('/api/v1/accounts/cash-close', ['date' => $this->today(), 'amount_confirmed' => 100000])->json('data.id');
+
+        $admin = User::where('tenant_id', $this->tenant->id)->where('role', 'admin')->first();
+        $this->actingAsUser($admin)->getJson("/api/v1/accounts/cash-close/{$closeId}")
+            ->assertOk()
+            ->assertJsonPath('data.close.id', $closeId)
+            ->assertJsonPath('data.close.technician.id', $this->tech->id);
+    }
+
     public function test_technician_cannot_see_other_technicians_cash(): void
     {
         $other = $this->makeUser($this->tenant, Role::Technician);
