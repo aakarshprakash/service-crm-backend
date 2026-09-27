@@ -425,6 +425,7 @@ class AuthController extends Controller
                 'trial_ends_at' => $tenant->trial_ends_at,
                 'online_payments' => $tenant->onlinePaymentsEnabled(),
                 'portal_enabled' => $tenant->portalEnabled(),
+                'tutorial_mode' => (bool) $tenant->setting('tutorial_mode'),
             ] : null,
         ];
     }

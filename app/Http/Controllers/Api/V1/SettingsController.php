@@ -71,6 +71,7 @@ class SettingsController extends Controller
             'online_payments' => ['sometimes', 'boolean'],
             'strict_cash_close' => ['sometimes', 'boolean'],
             'customer_portal' => ['sometimes', 'boolean'],
+            'tutorial_mode' => ['sometimes', 'boolean'],
         ]);
         $tenant->update(['settings' => array_replace_recursive($tenant->mergedSettings(), $data)]);
 

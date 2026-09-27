@@ -27,6 +27,7 @@ class Tenant extends Model
         'online_payments' => false,
         'strict_cash_close' => true,
         'customer_portal' => true,
+        'tutorial_mode' => false,
     ];
 
     protected function casts(): array
