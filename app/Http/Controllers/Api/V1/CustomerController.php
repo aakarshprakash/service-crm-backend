@@ -10,6 +10,7 @@ use App\Support\Audit;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -42,7 +43,7 @@ class CustomerController extends Controller
         $data = $request->validate($this->rules() + $this->productRules('products.*.'));
 
         $customer = DB::transaction(function () use ($data) {
-            $customer = Customer::create($data);
+            $customer = Customer::create(Arr::except($data, ['products']));
             foreach ($data['products'] ?? [] as $product) {
                 $customer->products()->create($product);
             }
