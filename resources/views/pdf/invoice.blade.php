@@ -84,7 +84,7 @@
     @foreach ($invoice->items as $line)
         <tr>
             <td>{{ $invoice->generated_at->timezone($tz)->format('d M Y') }}</td>
-            <td>{{ $line->description }}@if ($line->type === 'part' && $line->item) <span class="muted">({{ $line->item->code }})</span>@endif</td>
+            <td>{{ $line->description }}@if ($line->type === 'part' && $line->item && ! str_contains($line->description, $line->item->code)) <span class="muted">({{ $line->item->code }})</span>@endif</td>
             <td class="right">{{ rtrim(rtrim(number_format($line->quantity, 3), '0'), '.') }}{{ $line->item ? ' '.$line->item->unit_of_measure : '' }}</td>
             <td class="right">{{ $money($line->unit_price) }}</td>
             <td class="right">{{ $money($line->total) }}</td>
