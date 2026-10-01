@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\Admin\PlatformController;
+use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CashCloseController;
 use App\Http\Controllers\Api\V1\CustomerController;
@@ -158,6 +159,20 @@ Route::prefix('v1')->group(function () {
             Route::delete('visits/{id}/spares/{usageId}', [VisitController::class, 'removeSpare'])->whereNumber(['id', 'usageId']);
             Route::post('visits/{id}/complete', [VisitController::class, 'complete'])->whereNumber('id');
             Route::post('invoices/{id}/collect', [InvoiceController::class, 'collect'])->whereNumber('id');
+        });
+
+        // Assets: company tools / vehicles / devices issued to technicians.
+        Route::get('my/assets', [AssetController::class, 'mine']);
+        Route::middleware('can:assets.view')->group(function () {
+            Route::get('assets', [AssetController::class, 'index']);
+            Route::get('assets/{id}', [AssetController::class, 'show'])->whereNumber('id');
+        });
+        Route::middleware('can:assets.manage')->group(function () {
+            Route::post('assets', [AssetController::class, 'store']);
+            Route::patch('assets/{id}', [AssetController::class, 'update'])->whereNumber('id');
+            Route::post('assets/{id}/issue', [AssetController::class, 'issue'])->whereNumber('id');
+            Route::post('assets/{id}/return', [AssetController::class, 'return'])->whereNumber('id');
+            Route::patch('assets/{id}/status', [AssetController::class, 'setStatus'])->whereNumber('id');
         });
 
         // Inventory (§5.7)

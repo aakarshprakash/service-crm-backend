@@ -2,6 +2,8 @@
 
 namespace App\Services\Reports;
 
+use App\Models\Asset;
+use App\Models\AssetAssignment;
 use App\Models\CashClose;
 use App\Models\InventoryStock;
 use App\Models\Invoice;
@@ -37,6 +39,7 @@ class ReportService
         'low-stock' => ['Low Stock / Reorder', 'reports.financial', 'Items at or below their reorder level.'],
         'inventory-valuation' => ['Inventory Valuation', 'reports.financial', 'Stock value (quantity × average cost) by branch and category.'],
         'detailed-summary' => ['Detailed Combined Report', 'reports.financial', 'Job + charges + items used + payment + technician, per visit.'],
+        'assets' => ['Asset Register', 'reports.view', 'Company tools, vehicles and devices with status, condition, current holder and value.'],
     ];
 
     private Tenant $tenant;
@@ -61,6 +64,54 @@ class ReportService
     }
 
     // ---- Reports ---------------------------------------------------------
+
+    private function assets(?int $limit): ReportResult
+    {
+        $q = Asset::query()
+            ->leftJoin('users as h', 'h.id', '=', 'assets.assigned_to')
+            ->leftJoin('branches', 'branches.id', '=', 'assets.branch_id')
+            ->when($this->f('branch_id'), fn ($q, $v) => $q->where('assets.branch_id', $v))
+            ->when($this->f('technician_id'), fn ($q, $v) => $q->where('assets.assigned_to', $v))
+            ->when($this->f('status'), fn ($q, $v) => $q->where('assets.status', $v))
+            ->orderBy('assets.asset_code');
+
+        $summary = (clone $q)->reorder()->selectRaw('assets.status, COUNT(*) as c, COALESCE(SUM(assets.purchase_cost), 0) as v')->groupBy('assets.status')->get()->keyBy('status');
+        $since = AssetAssignment::whereNull('returned_at')->pluck('issued_at', 'asset_id');
+
+        $rows = $q->limit($limit ?? PHP_INT_MAX)->get([
+            'assets.id', 'assets.asset_code', 'assets.name', 'assets.category', 'assets.brand', 'assets.model', 'assets.serial_no',
+            'assets.status', 'assets.condition', 'h.name as holder', 'branches.name as branch', 'assets.purchase_date', 'assets.purchase_cost',
+        ])->map(fn ($r) => [
+            'asset_code' => $r->asset_code,
+            'name' => $r->name,
+            'category' => ucfirst($r->category),
+            'make' => trim(($r->brand ?? '').' '.($r->model ?? '')) ?: null,
+            'serial_no' => $r->serial_no,
+            'status' => ucfirst(str_replace('_', ' ', $r->status)),
+            'condition' => ucfirst($r->condition),
+            'holder' => $r->holder,
+            'since' => $this->local($since[$r->id] ?? null, 'Y-m-d'),
+            'branch' => $r->branch,
+            'purchase_date' => $r->purchase_date?->format('Y-m-d'),
+            'cost' => (int) $r->purchase_cost,
+        ]);
+
+        $count = fn (string $s) => (int) ($summary[$s]->c ?? 0);
+
+        return new ReportResult([
+            'asset_code' => ['Code'], 'name' => ['Asset'], 'category' => ['Category'], 'make' => ['Brand / model'], 'serial_no' => ['Serial no.'],
+            'status' => ['Status'], 'condition' => ['Condition'], 'holder' => ['Held by'], 'since' => ['Since', 'date'], 'branch' => ['Branch'],
+            'purchase_date' => ['Purchased', 'date'], 'cost' => ['Cost', 'money'],
+        ], $rows->all(), [
+            'Total assets' => $summary->sum('c'),
+            'Issued' => $count('assigned'),
+            'Available' => $count('available'),
+            'Under repair' => $count('under_repair'),
+            'Lost' => $count('lost'),
+            'Retired' => $count('retired'),
+            'Total value' => $this->money($summary->sum('v')),
+        ]);
+    }
 
     private function jobs(?int $limit): ReportResult
     {

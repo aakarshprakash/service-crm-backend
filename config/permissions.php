@@ -27,6 +27,9 @@ return [
     'visits.execute' => ['technician'],
     'punch' => ['technician'],
 
+    'assets.view' => $staff,
+    'assets.manage' => ['admin', 'coordinator'],
+
     'inventory.view' => [...$staff, 'technician'],
     'inventory.manage' => ['admin', 'accountant'],
 
