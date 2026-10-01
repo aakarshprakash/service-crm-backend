@@ -7,10 +7,10 @@
     @page { margin: 24px 24px 36px; }
     * { font-family: "DejaVu Sans", sans-serif; }
     body { font-size: 8.5px; color: #1f2937; }
-    h1 { font-size: 15px; margin: 0; color: #1e3a8a; }
+    h1 { font-size: 15px; margin: 0; color: #0f172a; }
     .muted { color: #6b7280; }
     table { width: 100%; border-collapse: collapse; }
-    .data th { background: #1e3a8a; color: #fff; padding: 5px 4px; text-align: left; font-size: 8px; }
+    .data th { background: #0f172a; color: #fff; padding: 5px 4px; text-align: left; font-size: 8px; }
     .data td { padding: 4px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
     .data tr:nth-child(even) td { background: #f9fafb; }
     .data tr.flag td { background: #fef3c7; }

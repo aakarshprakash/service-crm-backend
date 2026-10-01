@@ -9,15 +9,15 @@
     body { font-size: 10.5px; color: #1f2937; }
     .muted { color: #6b7280; }
     .right { text-align: right; }
-    h1 { font-size: 20px; margin: 0; color: #1e3a8a; }
+    h1 { font-size: 20px; margin: 0; color: #0f172a; }
     h2 { font-size: 11px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: .06em; color: #6b7280; }
     table { width: 100%; border-collapse: collapse; }
     .head td { vertical-align: top; }
     .box { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 12px; }
-    .items th { background: #1e3a8a; color: #fff; text-align: left; padding: 7px 8px; font-size: 10px; }
+    .items th { background: #0f172a; color: #fff; text-align: left; padding: 7px 8px; font-size: 10px; }
     .items td { padding: 7px 8px; border-bottom: 1px solid #e5e7eb; }
     .totals td { padding: 4px 8px; }
-    .totals .grand td { font-size: 13px; font-weight: bold; border-top: 2px solid #1e3a8a; padding-top: 8px; }
+    .totals .grand td { font-size: 13px; font-weight: bold; border-top: 2px solid #2563eb; padding-top: 8px; }
     .badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 10px; font-weight: bold; }
     .paid { background: #dcfce7; color: #166534; } .partial { background: #fef3c7; color: #92400e; } .unpaid { background: #fee2e2; color: #991b1b; }
     .footer { margin-top: 28px; font-size: 9px; color: #9ca3af; text-align: center; }
