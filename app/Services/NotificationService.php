@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Jobs\SendNotification;
+use App\Models\Customer;
+use App\Models\Invoice;
 use App\Models\NotificationLog;
 use App\Models\NotificationTemplate;
 use App\Models\ServiceJob;
@@ -47,6 +49,37 @@ class NotificationService
             'scheduled_at' => $job->scheduled_at?->timezone($tenant->timezone)->format('d M Y, h:i A') ?? 'to be confirmed',
         ], $vars);
 
+        $this->sendToCustomer($tenant, $customer, $event, $vars, ['job_id' => $job->id]);
+    }
+
+    /** Customer message about an invoice: via its job, or directly for a walk-in bill (no job). */
+    public function notifyInvoiceCustomer(Invoice $invoice, string $event, array $vars = []): void
+    {
+        $invoice->loadMissing(['job', 'customer']);
+        if ($invoice->job) {
+            $this->notifyCustomer($invoice->job, $event, $vars);
+
+            return;
+        }
+        $tenant = app(TenantContext::class)->tenant() ?? Tenant::find($invoice->tenant_id);
+        $customer = $invoice->customer;
+        if (! $tenant || ! $customer?->phone) {
+            return;
+        }
+        $vars = array_merge([
+            'customer_name' => $customer->name,
+            'call_id' => $invoice->invoice_number,
+            'company' => $tenant->name,
+            'technician_name' => '-',
+            'technician_phone' => '-',
+            'scheduled_at' => '-',
+        ], $vars);
+
+        $this->sendToCustomer($tenant, $customer, $event, $vars, ['invoice_id' => $invoice->id]);
+    }
+
+    private function sendToCustomer(Tenant $tenant, Customer $customer, string $event, array $vars, array $data): void
+    {
         foreach (['sms', 'whatsapp'] as $channel) {
             if (! $tenant->channelEnabled($channel)) {
                 continue;
@@ -61,7 +94,7 @@ class NotificationService
                 'channel' => $channel,
                 'recipient' => $customer->phone,
                 'message' => $body,
-                'data' => ['job_id' => $job->id],
+                'data' => $data,
             ]);
         }
     }

@@ -47,7 +47,7 @@
             <h1>INVOICE</h1>
             <div style="margin-top:6px"><strong>{{ $invoice->invoice_number }}</strong></div>
             <div class="muted">Date: {{ $invoice->generated_at->timezone($tz)->format('d M Y') }}</div>
-            <div class="muted">Call ID: {{ $invoice->job?->crm_call_id }}</div>
+            @if ($invoice->job)<div class="muted">Call ID: {{ $invoice->job->crm_call_id }}</div>@else<div class="muted">Walk-in bill</div>@endif
             <div style="margin-top:8px"><span class="badge {{ $invoice->payment_status }}">{{ strtoupper($invoice->payment_status) }}{{ $invoice->is_credit && $invoice->balance_amount > 0 ? ' · CREDIT' : '' }}</span></div>
         </td>
     </tr>
@@ -65,11 +65,12 @@
         </td>
         <td style="width:50%; padding-left:8px; vertical-align:top">
             <div class="box">
-                <h2>Service details</h2>
+                <h2>{{ $invoice->job ? 'Service details' : 'Bill details' }}</h2>
                 @if ($product?->product)<div>Product: {{ $product->product->brand?->name }} {{ $product->product->model_name }}</div>@endif
                 @if ($product?->serial_no)<div>Serial no: {{ $product->serial_no }}</div>@endif
                 @if ($invoice->job?->complaintType)<div>Complaint: {{ $invoice->job->complaintType->name }}</div>@endif
                 @if ($invoice->branch)<div>Branch: {{ $invoice->branch->name }}</div>@endif
+                @if ($invoice->notes)<div class="muted">{{ $invoice->notes }}</div>@endif
             </div>
         </td>
     </tr>
@@ -80,6 +81,15 @@
         <tr><th style="width:18%">Date</th><th>Description</th><th class="right" style="width:12%">Qty</th><th class="right" style="width:16%">Rate</th><th class="right" style="width:16%">Amount</th></tr>
     </thead>
     <tbody>
+    @foreach ($invoice->items as $line)
+        <tr>
+            <td>{{ $invoice->generated_at->timezone($tz)->format('d M Y') }}</td>
+            <td>{{ $line->description }}@if ($line->type === 'part' && $line->item) <span class="muted">({{ $line->item->code }})</span>@endif</td>
+            <td class="right">{{ rtrim(rtrim(number_format($line->quantity, 3), '0'), '.') }}{{ $line->item ? ' '.$line->item->unit_of_measure : '' }}</td>
+            <td class="right">{{ $money($line->unit_price) }}</td>
+            <td class="right">{{ $money($line->total) }}</td>
+        </tr>
+    @endforeach
     @foreach ($invoice->job?->visits ?? [] as $visit)
         @continue($visit->status === 'in_progress')
         @if ($visit->labour_charge > 0)
@@ -127,6 +137,7 @@
             <table class="totals">
                 <tr><td>Total service charge</td><td class="right">{{ $money($invoice->total_service_charge) }}</td></tr>
                 <tr><td>Total spare charge</td><td class="right">{{ $money($invoice->total_spare_charge) }}</td></tr>
+                @if ($invoice->discount_amount > 0)<tr><td>Discount</td><td class="right">- {{ $money($invoice->discount_amount) }}</td></tr>@endif
                 <tr class="grand"><td>Total</td><td class="right">{{ $money($invoice->total_amount) }}</td></tr>
                 <tr><td>Paid</td><td class="right">{{ $money($invoice->paid_amount) }}</td></tr>
                 <tr><td><strong>Balance due</strong></td><td class="right"><strong>{{ $money($invoice->balance_amount) }}</strong></td></tr>

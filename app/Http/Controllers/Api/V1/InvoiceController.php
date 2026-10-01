@@ -31,6 +31,7 @@ class InvoiceController extends Controller
             ->with(['customer:id,name,phone', 'job:id,crm_call_id,assigned_technician_id', 'job.technician:id,name', 'branch:id,name'])
             ->when($request->filled('payment_status'), fn ($q) => $q->whereIn('payment_status', explode(',', $request->string('payment_status'))))
             ->when($request->boolean('credit'), fn ($q) => $q->where('is_credit', true))
+            ->when($request->filled('source'), fn ($q) => $q->where('source', $request->string('source')))
             ->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')))
             ->when($request->filled('technician_id'), fn ($q) => $q->whereHas('job', fn ($j) => $j->where('assigned_technician_id', $request->integer('technician_id'))))
             ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
@@ -55,7 +56,7 @@ class InvoiceController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         $invoice = $this->scoped($request)->with([
-            'customer', 'branch:id,name', 'payments.collector:id,name',
+            'customer', 'branch:id,name', 'payments.collector:id,name', 'creator:id,name', 'items.item:id,code,name,unit_of_measure',
             'job:id,crm_call_id,status,customer_product_id,assigned_technician_id', 'job.technician:id,name',
             'job.visits' => fn ($q) => $q->where('status', '!=', 'in_progress'),
             'job.visits.actionTaken:id,name', 'job.visits.technician:id,name', 'job.visits.inventoryUsage.item:id,code,name,unit_of_measure',
@@ -117,7 +118,7 @@ class InvoiceController extends Controller
         $invoice = Invoice::with('job')->findOrFail($id);
         abort_if($invoice->balance_amount <= 0, 422, 'This invoice is fully paid.');
         $tenant = app(TenantContext::class)->tenant();
-        $notifications->notifyCustomer($invoice->job, 'payment_link', [
+        $notifications->notifyInvoiceCustomer($invoice, 'payment_link', [
             'invoice_number' => $invoice->invoice_number,
             'balance' => Money::format($invoice->balance_amount, $tenant->currency),
             'pay_link' => $tenant->onlinePaymentsEnabled() ? $this->invoices->payLink($invoice) : 'Please pay our service agent or visit our office.',

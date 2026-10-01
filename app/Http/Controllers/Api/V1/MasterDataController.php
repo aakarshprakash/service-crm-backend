@@ -9,6 +9,8 @@ use App\Models\Brand;
 use App\Models\ComplaintSummary;
 use App\Models\ComplaintType;
 use App\Models\Dealer;
+use App\Models\Expense;
+use App\Models\ExpenseCategory;
 use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ServiceJob;
@@ -37,6 +39,7 @@ class MasterDataController extends Controller
         'action-taken-options' => ActionTakenOption::class,
         'branches' => Branch::class,
         'service-locations' => ServiceLocation::class,
+        'expense-categories' => ExpenseCategory::class,
     ];
 
     /** All active lookups in one call for forms (cached per request by the client). */
@@ -54,6 +57,7 @@ class MasterDataController extends Controller
             'complaint_summaries' => ComplaintSummary::where('is_active', true)->orderBy('name')->get(['id', 'name', 'complaint_type_id']),
             'action_taken_options' => $active(ActionTakenOption::class),
             'service_locations' => ServiceLocation::where('is_active', true)->orderBy('name')->get(['id', 'name', 'city', 'pincodes']),
+            'expense_categories' => $active(ExpenseCategory::class),
         ]);
     }
 
@@ -116,6 +120,11 @@ class MasterDataController extends Controller
             $record->update(['is_active' => false]);
 
             return $this->ok($record, 'This location is used by jobs, so it was deactivated instead of deleted.');
+        }
+        if ($type === 'expense-categories' && Expense::where('expense_category_id', $record->id)->exists()) {
+            $record->update(['is_active' => false]);
+
+            return $this->ok($record, 'This category has expenses, so it was deactivated instead of deleted.');
         }
         try {
             $record->delete();

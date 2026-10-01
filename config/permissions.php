@@ -27,6 +27,10 @@ return [
     'visits.execute' => ['technician'],
     'punch' => ['technician'],
 
+    'billing.walkin' => $staff,
+    'expenses.manage' => ['admin', 'accountant'],
+    'accounts.view' => ['admin', 'accountant'],
+
     'assets.view' => $staff,
     'assets.manage' => ['admin', 'coordinator'],
 

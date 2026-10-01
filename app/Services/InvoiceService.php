@@ -63,7 +63,7 @@ class InvoiceService
     public function pdf(Invoice $invoice): \Barryvdh\DomPDF\PDF
     {
         $invoice->loadMissing([
-            'customer', 'branch', 'payments' => fn ($q) => $q->where('status', 'success'),
+            'customer', 'branch', 'items.item', 'payments' => fn ($q) => $q->where('status', 'success'),
             'job.visits.actionTaken', 'job.visits.technician:id,name', 'job.visits.inventoryUsage.item',
             'job.customerProduct.product.brand', 'job.complaintType',
         ]);

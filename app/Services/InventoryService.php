@@ -96,6 +96,19 @@ class InventoryService
         });
     }
 
+    /** Part sold over the counter on a walk-in bill. */
+    public function sellForInvoice(int $invoiceId, InventoryItem $item, int $branchId, float $quantity, int $userId): void
+    {
+        DB::transaction(function () use ($invoiceId, $item, $branchId, $quantity, $userId) {
+            $stock = $this->lockedStock($branchId, $item->id);
+            $this->move($stock, $item, -$quantity, 'sale', [
+                'unit_cost' => $stock->avg_unit_cost,
+                'reference_type' => 'invoice', 'reference_id' => $invoiceId, 'created_by' => $userId,
+                'remarks' => 'Walk-in sale',
+            ]);
+        });
+    }
+
     /** Undo a usage line while the visit is still open (returns stock). */
     public function returnUsage(JobInventoryUsage $usage, int $userId): void
     {

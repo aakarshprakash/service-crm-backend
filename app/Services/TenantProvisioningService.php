@@ -6,6 +6,7 @@ use App\Enums\Role;
 use App\Models\ActionTakenOption;
 use App\Models\Branch;
 use App\Models\ComplaintType;
+use App\Models\ExpenseCategory;
 use App\Models\ProductCategory;
 use App\Models\SubscriptionPlan;
 use App\Models\Tenant;
@@ -32,6 +33,11 @@ class TenantProvisioningService
     ];
 
     public const DEFAULT_CATEGORIES = ['Air Conditioner', 'Refrigerator', 'Washing Machine', 'Microwave', 'Water Purifier', 'Television'];
+
+    public const DEFAULT_EXPENSE_CATEGORIES = [
+        'Fuel & travel', 'Salaries & wages', 'Rent', 'Electricity & utilities', 'Spare parts purchase', 'Tools & equipment',
+        'Repairs & maintenance', 'Office supplies', 'Phone & internet', 'Marketing', 'Food & refreshments', 'Other',
+    ];
 
     public function provision(array $data): array
     {
@@ -72,6 +78,9 @@ class TenantProvisioningService
                 }
                 foreach (self::DEFAULT_CATEGORIES as $name) {
                     ProductCategory::create(['name' => $name]);
+                }
+                foreach (self::DEFAULT_EXPENSE_CATEGORIES as $name) {
+                    ExpenseCategory::create(['name' => $name]);
                 }
 
                 $admin = new User([

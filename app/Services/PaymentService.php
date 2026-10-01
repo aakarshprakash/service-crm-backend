@@ -165,8 +165,7 @@ class PaymentService
 
     private function notifyReceived(Invoice $invoice, Payment $payment): void
     {
-        $invoice->loadMissing('job');
-        $this->notifications->notifyCustomer($invoice->job, 'payment_received', [
+        $this->notifications->notifyInvoiceCustomer($invoice, 'payment_received', [
             'amount' => Money::format($payment->amount, $this->currency($invoice)),
             'invoice_number' => $invoice->invoice_number,
             'receipt_number' => $payment->receipt_number,

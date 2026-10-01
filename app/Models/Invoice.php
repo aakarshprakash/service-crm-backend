@@ -13,8 +13,8 @@ class Invoice extends Model
     use Auditable, BelongsToTenant;
 
     protected $fillable = [
-        'job_id', 'customer_id', 'branch_id', 'invoice_number', 'total_service_charge', 'total_spare_charge',
-        'total_amount', 'paid_amount', 'balance_amount', 'payment_status', 'is_credit', 'pay_token', 'generated_at',
+        'job_id', 'source', 'customer_id', 'branch_id', 'invoice_number', 'total_service_charge', 'total_spare_charge', 'discount_amount',
+        'total_amount', 'paid_amount', 'balance_amount', 'payment_status', 'is_credit', 'notes', 'created_by', 'pay_token', 'generated_at',
     ];
 
     protected $hidden = ['pay_token'];
@@ -24,6 +24,7 @@ class Invoice extends Model
         return [
             'total_service_charge' => 'integer',
             'total_spare_charge' => 'integer',
+            'discount_amount' => 'integer',
             'total_amount' => 'integer',
             'paid_amount' => 'integer',
             'balance_amount' => 'integer',
@@ -52,6 +53,11 @@ class Invoice extends Model
         return $this->belongsTo(ServiceJob::class, 'job_id');
     }
 
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class)->withTrashed();
@@ -60,6 +66,17 @@ class Invoice extends Model
     public function branch(): BelongsTo
     {
         return $this->belongsTo(Branch::class);
+    }
+
+    /** Line items: only walk-in bills have them (job invoices are built from visits). */
+    public function items(): HasMany
+    {
+        return $this->hasMany(InvoiceItem::class);
+    }
+
+    public function isWalkIn(): bool
+    {
+        return $this->source === 'walk_in';
     }
 
     public function payments(): HasMany

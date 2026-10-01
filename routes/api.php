@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
+use App\Http\Controllers\Api\V1\BooksController;
+use App\Http\Controllers\Api\V1\ExpenseController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CashCloseController;
 use App\Http\Controllers\Api\V1\CustomerController;
@@ -17,6 +19,7 @@ use App\Http\Controllers\Api\V1\ReportController;
 use App\Http\Controllers\Api\V1\SettingsController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\VisitController;
+use App\Http\Controllers\Api\V1\WalkInBillController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -159,6 +162,19 @@ Route::prefix('v1')->group(function () {
             Route::delete('visits/{id}/spares/{usageId}', [VisitController::class, 'removeSpare'])->whereNumber(['id', 'usageId']);
             Route::post('visits/{id}/complete', [VisitController::class, 'complete'])->whereNumber('id');
             Route::post('invoices/{id}/collect', [InvoiceController::class, 'collect'])->whereNumber('id');
+        });
+
+        // Walk-in (counter) bills, expenses and the mini accounts books.
+        Route::post('walk-in-bills', [WalkInBillController::class, 'store'])->middleware('can:billing.walkin');
+        Route::middleware('can:expenses.manage')->group(function () {
+            Route::get('expenses', [ExpenseController::class, 'index']);
+            Route::post('expenses', [ExpenseController::class, 'store']);
+            Route::patch('expenses/{id}', [ExpenseController::class, 'update'])->whereNumber('id');
+            Route::delete('expenses/{id}', [ExpenseController::class, 'destroy'])->whereNumber('id');
+        });
+        Route::middleware('can:accounts.view')->group(function () {
+            Route::get('books/summary', [BooksController::class, 'summary']);
+            Route::get('books/day-book', [BooksController::class, 'dayBook']);
         });
 
         // Assets: company tools / vehicles / devices issued to technicians.

@@ -5,6 +5,7 @@ namespace App\Services\Reports;
 use App\Models\Asset;
 use App\Models\AssetAssignment;
 use App\Models\CashClose;
+use App\Models\Expense;
 use App\Models\InventoryStock;
 use App\Models\Invoice;
 use App\Models\JobInventoryUsage;
@@ -14,8 +15,10 @@ use App\Models\Review;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\BooksService;
 use App\Support\Money;
 use Carbon\CarbonImmutable;
+use Carbon\CarbonPeriod;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -40,6 +43,10 @@ class ReportService
         'inventory-valuation' => ['Inventory Valuation', 'reports.financial', 'Stock value (quantity × average cost) by branch and category.'],
         'detailed-summary' => ['Detailed Combined Report', 'reports.financial', 'Job + charges + items used + payment + technician, per visit.'],
         'assets' => ['Asset Register', 'reports.view', 'Company tools, vehicles and devices with status, condition, current holder and value.'],
+        'expenses' => ['Expense Report', 'reports.financial', 'Expenses by date, category, payment method and branch.'],
+        'profit-loss' => ['Income vs Expenses', 'reports.financial', 'Money collected against money spent, day by day, with net profit.'],
+        'day-book' => ['Day Book', 'reports.financial', 'Every payment received and every expense paid, in order.'],
+        'walk-in-sales' => ['Walk-in Sales', 'reports.financial', 'Counter bills: services and parts sold, discounts, paid and balance.'],
     ];
 
     private Tenant $tenant;
@@ -64,6 +71,137 @@ class ReportService
     }
 
     // ---- Reports ---------------------------------------------------------
+
+    private function expenses(?int $limit): ReportResult
+    {
+        [$from, $to] = $this->localDates();
+        $q = Expense::query()
+            ->leftJoin('expense_categories as c', 'c.id', '=', 'expenses.expense_category_id')
+            ->leftJoin('branches', 'branches.id', '=', 'expenses.branch_id')
+            ->leftJoin('users as u', 'u.id', '=', 'expenses.user_id')
+            ->whereBetween('expenses.expense_date', [$from, $to])
+            ->when($this->f('branch_id'), fn ($q, $v) => $q->where('expenses.branch_id', $v))
+            ->when($this->f('technician_id'), fn ($q, $v) => $q->where('expenses.user_id', $v))
+            ->orderBy('expenses.expense_date')->orderBy('expenses.id');
+
+        $byCategory = (clone $q)->reorder()->selectRaw("COALESCE(c.name, 'Uncategorised') as cat, SUM(expenses.amount) as t")->groupBy('cat')->orderByDesc('t')->pluck('t', 'cat');
+        $rows = $q->limit($limit ?? PHP_INT_MAX)->get([
+            'expenses.expense_date', 'c.name as category', 'expenses.paid_to', 'expenses.description', 'expenses.payment_method',
+            'expenses.reference_no', 'branches.name as branch', 'u.name as staff', 'expenses.amount',
+        ])->map(fn ($r) => [
+            'date' => $r->expense_date?->format('Y-m-d'),
+            'category' => $r->category ?? 'Uncategorised',
+            'paid_to' => $r->paid_to,
+            'description' => $r->description,
+            'method' => str_replace('_', ' ', $r->payment_method),
+            'reference' => $r->reference_no,
+            'branch' => $r->branch,
+            'staff' => $r->staff,
+            'amount' => (int) $r->amount,
+        ]);
+
+        return new ReportResult([
+            'date' => ['Date', 'date'], 'category' => ['Category'], 'paid_to' => ['Paid to'], 'description' => ['Description'],
+            'method' => ['Method'], 'reference' => ['Reference'], 'branch' => ['Branch'], 'staff' => ['Staff'], 'amount' => ['Amount', 'money'],
+        ], $rows->all(), ['Total expenses' => $this->money($byCategory->sum())] + $byCategory->take(5)->map(fn ($v) => $this->money($v))->all());
+    }
+
+    private function profitLoss(?int $limit): ReportResult
+    {
+        [$from, $to] = $this->localDates();
+        $books = app(BooksService::class);
+        $branch = $this->f('branch_id') ? (int) $this->f('branch_id') : null;
+        $s = $books->summary($from, $to, $this->tenant->timezone, $branch);
+        [$start, $end] = $books->bounds($from, $to, $this->tenant->timezone);
+        $offset = CarbonImmutable::now($this->tenant->timezone)->format('P');
+        $bySource = Payment::query()->where('payments.status', 'success')->whereBetween('payments.paid_at', [$start, $end])
+            ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')
+            ->when($branch, fn ($q, $v) => $q->where('invoices.branch_id', $v))
+            ->selectRaw("DATE(CONVERT_TZ(payments.paid_at, '+00:00', ?)) as d, invoices.source, SUM(payments.amount) as t", [$offset])
+            ->groupBy('d', 'invoices.source')->get()->groupBy('d');
+        $expenseByDay = Expense::query()->whereBetween('expense_date', [$from, $to])
+            ->when($branch, fn ($q, $v) => $q->where('branch_id', $v))
+            ->selectRaw('DATE(expense_date) as d, SUM(amount) as t')->groupBy('d')->pluck('t', 'd');
+
+        $rows = collect(CarbonPeriod::create($from, $to))->map(function ($day) use ($bySource, $expenseByDay) {
+            $d = $day->format('Y-m-d');
+            $src = ($bySource[$d] ?? collect())->pluck('t', 'source');
+            $job = (int) ($src['job'] ?? 0);
+            $walk = (int) ($src['walk_in'] ?? 0);
+            $exp = (int) ($expenseByDay[$d] ?? 0);
+
+            return ['date' => $d, 'service' => $job, 'walk_in' => $walk, 'income' => $job + $walk, 'expense' => $exp, 'net' => $job + $walk - $exp, '_flag' => $job + $walk - $exp < 0];
+        })->filter(fn ($r) => $r['income'] || $r['expense'])->values()->take($limit ?? PHP_INT_MAX);
+
+        return new ReportResult([
+            'date' => ['Date', 'date'], 'service' => ['Service income', 'money'], 'walk_in' => ['Walk-in income', 'money'],
+            'income' => ['Total income', 'money'], 'expense' => ['Expenses', 'money'], 'net' => ['Net', 'money'],
+        ], $rows->all(), [
+            'Income' => $this->money($s['income']),
+            'Expenses' => $this->money($s['expense']),
+            'Net profit' => $this->money($s['net']),
+            'Cash in minus cash out' => $this->money($s['cash']['net']),
+        ]);
+    }
+
+    private function dayBook(?int $limit): ReportResult
+    {
+        [$from, $to] = $this->localDates();
+        $branch = $this->f('branch_id') ? (int) $this->f('branch_id') : null;
+        $rows = collect(app(BooksService::class)->dayBook($from, $to, $this->tenant->timezone, $branch))
+            ->map(fn ($r) => $r + ['method_label' => str_replace('_', ' ', $r['method'])])
+            ->take($limit ?? PHP_INT_MAX);
+
+        $in = $rows->sum('in');
+        $out = $rows->sum('out');
+
+        return new ReportResult([
+            'at' => ['Date', 'datetime'], 'kind' => ['Type'], 'ref' => ['Receipt / ref'], 'party' => ['Customer / paid to'],
+            'details' => ['Details'], 'method_label' => ['Method'], 'in' => ['In', 'money'], 'out' => ['Out', 'money'],
+        ], $rows->all(), ['Money in' => $this->money($in), 'Money out' => $this->money($out), 'Net' => $this->money($in - $out)]);
+    }
+
+    private function walkInSales(?int $limit): ReportResult
+    {
+        $q = Invoice::query()->where('invoices.source', 'walk_in')
+            ->leftJoin('customers as c', 'c.id', '=', 'invoices.customer_id')
+            ->leftJoin('users as u', 'u.id', '=', 'invoices.created_by')
+            ->leftJoin('branches', 'branches.id', '=', 'invoices.branch_id')
+            ->tap(fn ($q) => $this->dateRange($q, 'invoices.generated_at'))
+            ->when($this->f('branch_id'), fn ($q, $v) => $q->where('invoices.branch_id', $v))
+            ->orderBy('invoices.generated_at');
+
+        $rows = $q->limit($limit ?? PHP_INT_MAX)->get([
+            'invoices.generated_at', 'invoices.invoice_number', 'c.name as customer', 'c.phone', 'invoices.total_service_charge',
+            'invoices.total_spare_charge', 'invoices.discount_amount', 'invoices.total_amount', 'invoices.paid_amount', 'invoices.balance_amount',
+            'branches.name as branch', 'u.name as billed_by',
+        ])->map(fn ($r) => [
+            'date' => $this->local($r->generated_at), 'invoice_number' => $r->invoice_number, 'customer' => $r->customer, 'phone' => $r->phone,
+            'services' => $r->total_service_charge, 'parts' => $r->total_spare_charge, 'discount' => $r->discount_amount,
+            'total' => $r->total_amount, 'paid' => $r->paid_amount, 'balance' => $r->balance_amount, 'branch' => $r->branch, 'billed_by' => $r->billed_by,
+        ]);
+
+        return new ReportResult([
+            'date' => ['Date', 'datetime'], 'invoice_number' => ['Bill no.'], 'customer' => ['Customer'], 'phone' => ['Phone'],
+            'services' => ['Services', 'money'], 'parts' => ['Parts', 'money'], 'discount' => ['Discount', 'money'], 'total' => ['Total', 'money'],
+            'paid' => ['Paid', 'money'], 'balance' => ['Balance', 'money'], 'branch' => ['Branch'], 'billed_by' => ['Billed by'],
+        ], $rows->all(), [
+            'Bills' => $rows->count(),
+            'Sales' => $this->money($rows->sum('total')),
+            'Parts sold' => $this->money($rows->sum('parts')),
+            'Discounts' => $this->money($rows->sum('discount')),
+            'Outstanding' => $this->money($rows->sum('balance')),
+        ]);
+    }
+
+    /** The report period as local Y-m-d dates (for DATE columns). @return array{0: string, 1: string} */
+    private function localDates(): array
+    {
+        [$from, $to] = $this->range();
+        $tz = $this->tenant->timezone;
+
+        return [$from->timezone($tz)->toDateString(), $to->timezone($tz)->toDateString()];
+    }
 
     private function assets(?int $limit): ReportResult
     {
@@ -335,7 +473,7 @@ class ReportService
     {
         $rows = Invoice::query()
             ->join('customers as c', 'c.id', '=', 'invoices.customer_id')
-            ->join('service_jobs as j', 'j.id', '=', 'invoices.job_id')
+            ->leftJoin('service_jobs as j', 'j.id', '=', 'invoices.job_id')
             ->where('invoices.balance_amount', '>', 0)
             ->when($this->f('credit_only'), fn ($q) => $q->where('invoices.is_credit', true))
             ->when($this->f('branch_id'), fn ($q, $v) => $q->where('invoices.branch_id', $v))
@@ -347,7 +485,7 @@ class ReportService
                 $days = (int) $r->generated_at->diffInDays(now());
 
                 return [
-                    'customer' => $r->customer, 'phone' => $r->phone, 'invoice_number' => $r->invoice_number, 'call_id' => $r->crm_call_id,
+                    'customer' => $r->customer, 'phone' => $r->phone, 'invoice_number' => $r->invoice_number, 'call_id' => $r->crm_call_id ?? 'Walk-in',
                     'date' => $this->local($r->generated_at, 'Y-m-d'), 'type' => $r->is_credit ? 'Credit' : 'Unpaid',
                     'total' => $r->total_amount, 'paid' => $r->paid_amount, 'balance' => $r->balance_amount, 'age_days' => $days,
                     'bucket' => match (true) {
