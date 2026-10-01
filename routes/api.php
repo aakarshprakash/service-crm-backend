@@ -140,6 +140,7 @@ Route::prefix('v1')->group(function () {
             Route::post('jobs', [JobController::class, 'store']);
             Route::patch('jobs/{id}', [JobController::class, 'update'])->whereNumber('id');
             Route::patch('jobs/{id}/assign', [JobController::class, 'assign'])->whereNumber('id');
+            Route::post('jobs/{id}/auto-assign', [JobController::class, 'autoAssign'])->whereNumber('id');
             Route::patch('jobs/{id}/reschedule', [JobController::class, 'reschedule'])->whereNumber('id');
             Route::post('jobs/{id}/cancel', [JobController::class, 'cancel'])->whereNumber('id');
             Route::post('jobs/{id}/follow-up', [JobController::class, 'followUp'])->whereNumber('id');

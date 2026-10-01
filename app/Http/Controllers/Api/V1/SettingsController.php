@@ -72,6 +72,8 @@ class SettingsController extends Controller
             'strict_cash_close' => ['sometimes', 'boolean'],
             'customer_portal' => ['sometimes', 'boolean'],
             'tutorial_mode' => ['sometimes', 'boolean'],
+            'auto_assign_max_jobs' => ['sometimes', 'integer', 'min:1', 'max:500'],
+            'auto_assign_on_duty_only' => ['sometimes', 'boolean'],
         ]);
         $tenant->update(['settings' => array_replace_recursive($tenant->mergedSettings(), $data)]);
 

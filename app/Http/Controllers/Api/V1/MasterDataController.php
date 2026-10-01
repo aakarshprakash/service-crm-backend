@@ -11,6 +11,8 @@ use App\Models\ComplaintType;
 use App\Models\Dealer;
 use App\Models\Product;
 use App\Models\ProductCategory;
+use App\Models\ServiceJob;
+use App\Models\ServiceLocation;
 use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
@@ -21,7 +23,7 @@ use Illuminate\Validation\Rule;
 /**
  * Tenant-configurable master data (§5.14) behind one controller:
  * /master/{type} where type ∈ brands, categories, products, dealers, complaint-types,
- * complaint-summaries, action-taken-options, branches.
+ * complaint-summaries, action-taken-options, branches, service-locations.
  */
 class MasterDataController extends Controller
 {
@@ -34,6 +36,7 @@ class MasterDataController extends Controller
         'complaint-summaries' => ComplaintSummary::class,
         'action-taken-options' => ActionTakenOption::class,
         'branches' => Branch::class,
+        'service-locations' => ServiceLocation::class,
     ];
 
     /** All active lookups in one call for forms (cached per request by the client). */
@@ -50,6 +53,7 @@ class MasterDataController extends Controller
             'complaint_types' => $active(ComplaintType::class),
             'complaint_summaries' => ComplaintSummary::where('is_active', true)->orderBy('name')->get(['id', 'name', 'complaint_type_id']),
             'action_taken_options' => $active(ActionTakenOption::class),
+            'service_locations' => ServiceLocation::where('is_active', true)->orderBy('name')->get(['id', 'name', 'city', 'pincodes']),
         ]);
     }
 
@@ -66,6 +70,8 @@ class MasterDataController extends Controller
             $query->with(['brand:id,name', 'category:id,name'])->orderBy('model_name');
         } elseif ($type === 'complaint-summaries') {
             $query->with('complaintType:id,name')->orderBy('name');
+        } elseif ($type === 'service-locations') {
+            $query->with('technicians:id,name')->withCount('technicians')->orderBy('name');
         } else {
             $query->orderBy('name');
         }
@@ -76,7 +82,13 @@ class MasterDataController extends Controller
     public function store(Request $request, string $type): JsonResponse
     {
         $class = $this->model($type);
-        $record = $class::create($request->validate($this->rules($type)));
+        $data = $request->validate($this->rules($type));
+        $technicianIds = $this->pullTechnicians($data);
+        $record = $class::create($data);
+        if ($technicianIds !== null) {
+            $record->technicians()->sync($technicianIds);
+            $record->load('technicians:id,name')->loadCount('technicians');
+        }
 
         return $this->created($record);
     }
@@ -85,7 +97,13 @@ class MasterDataController extends Controller
     {
         $class = $this->model($type);
         $record = $class::findOrFail($id);
-        $record->update($request->validate($this->rules($type, $record)));
+        $data = $request->validate($this->rules($type, $record));
+        $technicianIds = $this->pullTechnicians($data);
+        $record->update($data);
+        if ($technicianIds !== null) {
+            $record->technicians()->sync($technicianIds);
+            $record->load('technicians:id,name')->loadCount('technicians');
+        }
 
         return $this->ok($record, 'Saved.');
     }
@@ -93,6 +111,12 @@ class MasterDataController extends Controller
     public function destroy(string $type, int $id): JsonResponse
     {
         $record = $this->model($type)::findOrFail($id);
+        // Jobs keep their location history (the FK would otherwise just null it out).
+        if ($type === 'service-locations' && ServiceJob::where('service_location_id', $record->id)->exists()) {
+            $record->update(['is_active' => false]);
+
+            return $this->ok($record, 'This location is used by jobs, so it was deactivated instead of deleted.');
+        }
         try {
             $record->delete();
         } catch (QueryException) {
@@ -103,6 +127,18 @@ class MasterDataController extends Controller
         }
 
         return $this->ok(null, 'Deleted.');
+    }
+
+    /** Technician links are a relation, not a column: take them out of the validated data. */
+    private function pullTechnicians(array &$data): ?array
+    {
+        if (! array_key_exists('technician_ids', $data)) {
+            return null;
+        }
+        $ids = array_values(array_unique(array_map('intval', $data['technician_ids'] ?? [])));
+        unset($data['technician_ids']);
+
+        return $ids;
     }
 
     /** @return class-string<Model> */
@@ -146,6 +182,15 @@ class MasterDataController extends Controller
                 'pincode' => ['nullable', 'string', 'max:12'],
                 'phone' => ['nullable', 'string', 'max:20'],
                 'is_active' => ['boolean'],
+            ],
+            'service-locations' => [
+                'name' => [$sometimes, 'string', 'max:150', $uniqueName],
+                'code' => ['nullable', 'string', 'max:20'],
+                'city' => ['nullable', 'string', 'max:100'],
+                'pincodes' => ['nullable', 'string', 'max:2000'],
+                'is_active' => ['boolean'],
+                'technician_ids' => ['sometimes', 'array', 'max:500'],
+                'technician_ids.*' => ['integer', Rule::exists('users', 'id')->where('tenant_id', $tenantId)->where('role', 'technician')],
             ],
             default => [
                 'name' => [$sometimes, 'string', 'max:150', $uniqueName],

@@ -23,7 +23,7 @@ class JobController extends Controller
     {
         $query = $this->filtered($request)
             ->with([
-                'customer:id,name,phone,city', 'technician:id,name', 'branch:id,name',
+                'customer:id,name,phone,city', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
                 'complaintType:id,name', 'customerProduct:id,product_id,serial_no', 'customerProduct.product:id,model_name,brand_id',
                 'customerProduct.product.brand:id,name',
             ]);
@@ -71,16 +71,30 @@ class JobController extends Controller
     {
         $data = $request->validate($this->rules());
         $this->assertProductBelongsToCustomer($data);
+        $autoAssign = (bool) ($data['auto_assign'] ?? false);
+        unset($data['auto_assign']);
+        if ($autoAssign) {
+            unset($data['assigned_technician_id']);
+        }
         $job = $this->jobs->create($data, $request->user());
 
-        return $this->created($job->load(['customer:id,name,phone', 'technician:id,name']), "Job {$job->crm_call_id} created.");
+        $message = "Job {$job->crm_call_id} created.";
+        $meta = [];
+        if ($autoAssign) {
+            $meta['auto_assign'] = $result = $this->jobs->autoAssign($job, $request->user());
+            $message = $result['assigned']
+                ? "Job {$job->crm_call_id} created and auto-assigned to {$result['technician']['name']}."
+                : "Job {$job->crm_call_id} created but not assigned: {$result['reason']}";
+        }
+
+        return $this->ok($job->fresh()->load(['customer:id,name,phone', 'technician:id,name', 'serviceLocation:id,name']), $message, 201, $meta);
     }
 
     /** FR-5.3 full job context. */
     public function show(Request $request, int $id): JsonResponse
     {
         $job = ServiceJob::with([
-            'customer', 'branch:id,name', 'complaintType:id,name', 'complaintSummary:id,name',
+            'customer', 'branch:id,name', 'serviceLocation:id,name', 'complaintType:id,name', 'complaintSummary:id,name',
             'customerProduct.product.brand:id,name', 'customerProduct.product.category:id,name', 'customerProduct.dealer:id,name',
             'technician:id,name,phone', 'creator:id,name',
             'visits.technician:id,name', 'visits.actionTaken:id,name', 'visits.assistedStaff:id,name',
@@ -101,7 +115,7 @@ class JobController extends Controller
         if ($job->status->isFinal()) {
             throw ValidationException::withMessages(['status' => 'Closed jobs cannot be edited.']);
         }
-        $data = $request->validate(collect($this->rules())->except(['customer_id', 'assigned_technician_id', 'crm_call_id'])
+        $data = $request->validate(collect($this->rules())->except(['customer_id', 'assigned_technician_id', 'crm_call_id', 'auto_assign'])
             ->map(fn ($rules) => array_map(fn ($r) => $r === 'required' ? 'sometimes' : $r, $rules))->all());
         $data['customer_id'] = $job->customer_id;
         $this->assertProductBelongsToCustomer($data);
@@ -109,6 +123,18 @@ class JobController extends Controller
         $job->update($data);
 
         return $this->ok($job, 'Job updated.');
+    }
+
+    /** Assign an existing job to the least-loaded technician for its location. */
+    public function autoAssign(Request $request, int $id): JsonResponse
+    {
+        $job = ServiceJob::findOrFail($id);
+        $result = $this->jobs->autoAssign($job, $request->user());
+        if (! $result['assigned']) {
+            throw ValidationException::withMessages(['technician' => $result['reason']]);
+        }
+
+        return $this->ok($job->fresh()->load('technician:id,name'), "Auto-assigned to {$result['technician']['name']} ({$result['open_jobs']} open jobs).", 200, ['auto_assign' => $result]);
     }
 
     public function assign(Request $request, int $id): JsonResponse
@@ -168,6 +194,7 @@ class JobController extends Controller
                 ? $q->whereNull('assigned_technician_id')
                 : $q->where('assigned_technician_id', $request->integer('technician_id')))
             ->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')))
+            ->when($request->filled('service_location_id'), fn ($q) => $q->where('service_location_id', $request->integer('service_location_id')))
             ->when($request->filled('priority'), fn ($q) => $q->where('priority', $request->string('priority')))
             ->when($request->filled('complaint_type_id'), fn ($q) => $q->where('complaint_type_id', $request->integer('complaint_type_id')))
             ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
@@ -201,6 +228,8 @@ class JobController extends Controller
             'call_type' => ['required', Rule::in(['crm_call', 'walk_in', 'referral'])],
             'scheduled_at' => ['nullable', 'date'],
             'assigned_technician_id' => ['nullable', 'integer'],
+            'service_location_id' => ['nullable', 'integer', $exists('service_locations')],
+            'auto_assign' => ['sometimes', 'boolean'],
         ];
     }
 

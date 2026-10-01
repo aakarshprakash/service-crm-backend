@@ -28,6 +28,8 @@ class Tenant extends Model
         'strict_cash_close' => true,
         'customer_portal' => true,
         'tutorial_mode' => false,
+        'auto_assign_max_jobs' => 10,
+        'auto_assign_on_duty_only' => false,
     ];
 
     protected function casts(): array

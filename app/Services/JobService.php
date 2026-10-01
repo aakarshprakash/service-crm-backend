@@ -15,7 +15,7 @@ use Illuminate\Validation\ValidationException;
 
 class JobService
 {
-    public function __construct(private NotificationService $notifications) {}
+    public function __construct(private NotificationService $notifications, private AutoAssigner $autoAssigner) {}
 
     public function create(array $data, ?User $creator): ServiceJob
     {
@@ -50,7 +50,7 @@ class JobService
         return $job;
     }
 
-    public function assign(ServiceJob $job, int $technicianId, ?string $scheduledAt, User $by): ServiceJob
+    public function assign(ServiceJob $job, int $technicianId, ?string $scheduledAt, User $by, ?string $note = null): ServiceJob
     {
         $this->ensureNotFinal($job);
         $technician = $this->technicianOrFail($technicianId);
@@ -65,7 +65,7 @@ class JobService
             $job->scheduled_at = $scheduledAt;
         }
         $job->save();
-        $this->history($job, $job->status, $by->id, ($reassigned ? 'Reassigned' : 'Assigned')." to {$technician->name}");
+        $this->history($job, $job->status, $by->id, $note ?? (($reassigned ? 'Reassigned' : 'Assigned')." to {$technician->name}"));
 
         if ($reassigned && $old = User::inTenant()->find($previous)) {
             $this->notifications->notifyUser($old, 'job_reassigned', 'Job reassigned', "Job {$job->crm_call_id} has been reassigned to another technician.", ['job_id' => $job->id]);
@@ -74,6 +74,24 @@ class JobService
         $this->notifications->notifyCustomer($job, 'technician_assigned');
 
         return $job;
+    }
+
+    /**
+     * Assigns the job to the least-loaded technician for its service location.
+     *
+     * @return array{assigned: bool, technician: ?array{id: int, name: string}, open_jobs: ?int, reason: ?string}
+     */
+    public function autoAssign(ServiceJob $job, User $by): array
+    {
+        $this->ensureNotFinal($job);
+        $pick = $this->autoAssigner->pick($job);
+        if (! $pick['technician']) {
+            return ['assigned' => false, 'technician' => null, 'open_jobs' => null, 'reason' => $pick['reason']];
+        }
+        $tech = $pick['technician'];
+        $this->assign($job, $tech->id, null, $by, "Auto-assigned to {$tech->name} ({$pick['open_jobs']} open jobs at the time)");
+
+        return ['assigned' => true, 'technician' => ['id' => $tech->id, 'name' => $tech->name], 'open_jobs' => $pick['open_jobs'], 'reason' => null];
     }
 
     public function reschedule(ServiceJob $job, string $scheduledAt, ?string $reason, User $by): ServiceJob

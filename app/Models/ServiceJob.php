@@ -20,7 +20,7 @@ class ServiceJob extends Model
     use Auditable, BelongsToTenant;
 
     protected $fillable = [
-        'crm_call_id', 'customer_id', 'customer_product_id', 'branch_id', 'complaint_type_id', 'complaint_summary_id',
+        'crm_call_id', 'customer_id', 'customer_product_id', 'branch_id', 'service_location_id', 'complaint_type_id', 'complaint_summary_id',
         'complaint_details', 'priority', 'call_type', 'status', 'service_type', 'scheduled_at', 'assigned_technician_id',
         'created_by', 'parent_job_id', 'completed_at', 'cancelled_at', 'cancel_reason',
     ];
@@ -85,6 +85,11 @@ class ServiceJob extends Model
     public function branch(): BelongsTo
     {
         return $this->belongsTo(Branch::class);
+    }
+
+    public function serviceLocation(): BelongsTo
+    {
+        return $this->belongsTo(ServiceLocation::class);
     }
 
     public function complaintType(): BelongsTo

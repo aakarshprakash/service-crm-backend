@@ -8,6 +8,7 @@ use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -65,6 +66,17 @@ class User extends Authenticatable
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function assignedJobs(): HasMany
+    {
+        return $this->hasMany(ServiceJob::class, 'assigned_technician_id');
+    }
+
+    /** Areas a technician covers; used to auto-assign jobs. */
+    public function serviceLocations(): BelongsToMany
+    {
+        return $this->belongsToMany(ServiceLocation::class);
     }
 
     public function deviceTokens(): HasMany

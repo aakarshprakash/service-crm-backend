@@ -22,7 +22,7 @@ class UserController extends Controller
     {
         $users = User::inTenant()
             ->where('role', '!=', Role::Customer->value)
-            ->with('branch:id,name')
+            ->with(['branch:id,name', 'serviceLocations:id,name'])
             ->when($request->filled('role'), fn ($q) => $q->where('role', $request->string('role')))
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')))
@@ -50,12 +50,13 @@ class UserController extends Controller
 
     public function show(int $id): JsonResponse
     {
-        return $this->ok(User::inTenant()->with('branch:id,name')->findOrFail($id));
+        return $this->ok(User::inTenant()->with(['branch:id,name', 'serviceLocations:id,name'])->findOrFail($id));
     }
 
     public function store(Request $request): JsonResponse
     {
         $data = $this->validated($request);
+        $locations = $this->pullLocations($data);
         $tenant = app(TenantContext::class)->tenant();
         $this->enforcePlanLimits($data['role']);
 
@@ -63,12 +64,15 @@ class UserController extends Controller
         $user->tenant_id = $tenant->id;
         $user->status = ! empty($data['password']) ? 'active' : 'invited';
         $user->save();
+        if ($locations !== null) {
+            $user->serviceLocations()->sync($locations);
+        }
 
         if ($user->status === 'invited') {
             $this->sendInvite($user);
         }
 
-        return $this->created($user->load('branch:id,name'), $user->status === 'invited'
+        return $this->created($user->load(['branch:id,name', 'serviceLocations:id,name']), $user->status === 'invited'
             ? 'User created. An invitation email has been sent.'
             : 'User created.');
     }
@@ -77,6 +81,7 @@ class UserController extends Controller
     {
         $user = User::inTenant()->where('role', '!=', Role::Customer->value)->findOrFail($id);
         $data = $this->validated($request, $user);
+        $locations = $this->pullLocations($data);
 
         if ($user->id === $request->user()->id && isset($data['role']) && $data['role'] !== $user->role->value) {
             throw ValidationException::withMessages(['role' => 'You cannot change your own role.']);
@@ -88,8 +93,11 @@ class UserController extends Controller
             unset($data['password']);
         }
         $user->update($data);
+        if ($locations !== null) {
+            $user->serviceLocations()->sync($locations);
+        }
 
-        return $this->ok($user->load('branch:id,name'), 'User updated.');
+        return $this->ok($user->load(['branch:id,name', 'serviceLocations:id,name']), 'User updated.');
     }
 
     /** FR-2.5: deactivate without deleting history; revokes all sessions / tokens. */
@@ -161,7 +169,21 @@ class UserController extends Controller
             'role' => [$user ? 'sometimes' : 'required', Rule::in(Role::staffRoles())],
             'branch_id' => ['nullable', 'integer', Rule::exists(Branch::class, 'id')->where('tenant_id', $tenantId)],
             'password' => ['nullable', 'string', PasswordRule::defaults()],
+            'service_location_ids' => ['sometimes', 'array', 'max:200'],
+            'service_location_ids.*' => ['integer', Rule::exists('service_locations', 'id')->where('tenant_id', $tenantId)],
         ]);
+    }
+
+    /** Service locations are a relation, not a column. */
+    private function pullLocations(array &$data): ?array
+    {
+        if (! array_key_exists('service_location_ids', $data)) {
+            return null;
+        }
+        $ids = array_values(array_unique(array_map('intval', $data['service_location_ids'] ?? [])));
+        unset($data['service_location_ids']);
+
+        return $ids;
     }
 
     private function enforcePlanLimits(string $role): void
