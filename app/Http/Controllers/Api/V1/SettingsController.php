@@ -74,6 +74,10 @@ class SettingsController extends Controller
             'tutorial_mode' => ['sometimes', 'boolean'],
             'auto_assign_max_jobs' => ['sometimes', 'integer', 'min:1', 'max:500'],
             'auto_assign_on_duty_only' => ['sometimes', 'boolean'],
+            'attendance' => ['sometimes', 'array'],
+            'attendance.geofence' => ['sometimes', Rule::in(['off', 'flag', 'enforce'])],
+            'attendance.geofence_technicians' => ['sometimes', 'boolean'],
+            'attendance.require_location' => ['sometimes', 'boolean'],
         ]);
         $tenant->update(['settings' => array_replace_recursive($tenant->mergedSettings(), $data)]);
 

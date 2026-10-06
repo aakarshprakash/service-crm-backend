@@ -25,7 +25,8 @@ class ExpenseController extends Controller
             ->orderByDesc('expense_date')->orderByDesc('id')
             ->paginate($this->perPage($request));
 
-        return $this->paginated($rows, null, ['total' => (int) $byCategory->sum(), 'by_category' => $byCategory]);
+        // 'total' stays the row count the pager needs; the money sum goes in 'total_amount'.
+        return $this->paginated($rows, null, ['total_amount' => (int) $byCategory->sum(), 'by_category' => $byCategory]);
     }
 
     public function store(Request $request): JsonResponse
@@ -70,9 +71,11 @@ class ExpenseController extends Controller
         $tenantId = app(TenantContext::class)->id();
         $exists = fn (string $t) => Rule::exists($t, 'id')->where('tenant_id', $tenantId);
         $req = $update ? 'sometimes' : 'required';
+        // "Today" in the company's timezone, not the server's (UTC lags IST until 05:30).
+        $today = now(app(TenantContext::class)->tenant()->timezone)->toDateString();
 
         return [
-            'expense_date' => [$req, 'date', 'before_or_equal:today'],
+            'expense_date' => [$req, 'date', 'before_or_equal:'.$today],
             'expense_category_id' => [$req, 'integer', $exists('expense_categories')],
             'amount' => [$req, 'integer', 'min:1', 'max:10000000000'],
             'payment_method' => [$req, Rule::in(Expense::METHODS)],

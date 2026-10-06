@@ -11,6 +11,7 @@ use App\Services\NotificationService;
 use App\Services\PaymentService;
 use App\Support\Money;
 use App\Support\TenantContext;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -63,6 +64,7 @@ class InvoiceController extends Controller
         ])->findOrFail($id);
 
         $data = $invoice->toArray();
+        $data['upi'] = $this->invoices->upi($invoice);
         if ($request->user()->can('payments.record')) {
             $data['pay_link'] = $this->invoices->payLink($invoice);
         }
@@ -129,15 +131,24 @@ class InvoiceController extends Controller
 
     public function payments(Request $request): JsonResponse
     {
-        $rows = Payment::with(['invoice:id,invoice_number,customer_id', 'invoice.customer:id,name', 'collector:id,name'])
+        $tz = app(TenantContext::class)->tenant()->timezone;
+        $query = Payment::query()
             ->when($request->filled('method'), fn ($q) => $q->where('method', $request->string('method')))
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('collected_by'), fn ($q) => $q->where('collected_by', $request->integer('collected_by')))
-            ->when($request->filled('from'), fn ($q) => $q->whereDate('paid_at', '>=', $request->date('from')))
-            ->when($request->filled('to'), fn ($q) => $q->whereDate('paid_at', '<=', $request->date('to')))
-            ->latest('id')->paginate($this->perPage($request));
+            // Dates are the company's local days.
+            ->when($request->filled('from'), fn ($q) => $q->where('paid_at', '>=', CarbonImmutable::parse($request->input('from'), $tz)->startOfDay()->utc()))
+            ->when($request->filled('to'), fn ($q) => $q->where('paid_at', '<=', CarbonImmutable::parse($request->input('to'), $tz)->endOfDay()->utc()))
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $like = $this->like($request->string('search'));
+                $q->where(fn ($w) => $w->where('receipt_number', 'like', $like)->orWhere('reference_no', 'like', $like)
+                    ->orWhereHas('invoice', fn ($i) => $i->where('invoice_number', 'like', $like)->orWhereHas('customer', fn ($c) => $c->where('name', 'like', $like))));
+            });
+        $byMethod = (clone $query)->where('status', 'success')->selectRaw('method, SUM(amount) as t')->groupBy('method')->pluck('t', 'method')->map(fn ($v) => (int) $v);
+        $rows = $query->with(['invoice:id,invoice_number,customer_id', 'invoice.customer:id,name', 'collector:id,name'])
+            ->latest('paid_at')->latest('id')->paginate($this->perPage($request));
 
-        return $this->paginated($rows);
+        return $this->paginated($rows, null, ['total_amount' => (int) $byMethod->sum(), 'by_method' => $byMethod]);
     }
 
     /** Technicians only see invoices for jobs assigned to them. */

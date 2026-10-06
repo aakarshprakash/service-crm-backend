@@ -75,6 +75,7 @@ class DemoSeeder extends Seeder
 
         app(TenantContext::class)->runAs($tenant->id, fn () => $this->seedTenant($tenant, $admin));
         Carbon::setTestNow();
+        $this->call(V21DemoSeeder::class);
         $this->command?->info('Demo company "demo" seeded. Login admin@demo.test / '.self::PASSWORD);
     }
 

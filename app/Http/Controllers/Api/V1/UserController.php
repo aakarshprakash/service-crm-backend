@@ -128,23 +128,7 @@ class UserController extends Controller
     }
 
     /** FR-2.4 technician punch in / out. */
-    public function punch(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'type' => ['required', Rule::in(['in', 'out'])],
-            'lat' => ['nullable', 'numeric', 'between:-90,90'],
-            'lng' => ['nullable', 'numeric', 'between:-180,180'],
-        ]);
-        $user = $request->user();
-        if ($user->punch_status === $data['type']) {
-            throw ValidationException::withMessages(['type' => "You are already punched {$data['type']}."]);
-        }
-        PunchLog::create(['user_id' => $user->id] + $data);
-        $user->forceFill(['punch_status' => $data['type'], 'punched_at' => now()])->save();
-
-        return $this->ok(['punch_status' => $user->punch_status, 'punched_at' => $user->punched_at],
-            $data['type'] === 'in' ? 'Punched in. Have a great day!' : 'Punched out.');
-    }
+    // Punching moved to HrController::punch (geo-fenced attendance, v2.1).
 
     public function punchLogs(Request $request): JsonResponse
     {

@@ -7,6 +7,7 @@ use App\Models\ActionTakenOption;
 use App\Models\Branch;
 use App\Models\ComplaintType;
 use App\Models\ExpenseCategory;
+use App\Models\LeaveType;
 use App\Models\ProductCategory;
 use App\Models\SubscriptionPlan;
 use App\Models\Tenant;
@@ -37,6 +38,14 @@ class TenantProvisioningService
     public const DEFAULT_EXPENSE_CATEGORIES = [
         'Fuel & travel', 'Salaries & wages', 'Rent', 'Electricity & utilities', 'Spare parts purchase', 'Tools & equipment',
         'Repairs & maintenance', 'Office supplies', 'Phone & internet', 'Marketing', 'Food & refreshments', 'Other',
+    ];
+
+    /** Leave types every company starts with (editable in Master data). */
+    public const DEFAULT_LEAVE_TYPES = [
+        ['name' => 'Casual leave', 'code' => 'CL', 'annual_quota' => 12, 'is_paid' => true],
+        ['name' => 'Sick leave', 'code' => 'SL', 'annual_quota' => 12, 'is_paid' => true],
+        ['name' => 'Earned leave', 'code' => 'EL', 'annual_quota' => 15, 'is_paid' => true],
+        ['name' => 'Unpaid leave', 'code' => 'LOP', 'annual_quota' => 0, 'is_paid' => false],
     ];
 
     public function provision(array $data): array
@@ -81,6 +90,9 @@ class TenantProvisioningService
                 }
                 foreach (self::DEFAULT_EXPENSE_CATEGORIES as $name) {
                     ExpenseCategory::create(['name' => $name]);
+                }
+                foreach (self::DEFAULT_LEAVE_TYPES as $type) {
+                    LeaveType::create($type);
                 }
 
                 $admin = new User([

@@ -15,6 +15,11 @@ return [
 
     'name' => env('APP_NAME', 'Laravel'),
 
+    // Product version (web app, API and mobile app are released together).
+    'version' => '2.1.0',
+    // Oldest mobile app version the API still supports; older apps are asked to update.
+    'min_mobile_version' => '2.1.0',
+
     /*
     |--------------------------------------------------------------------------
     | Application Environment

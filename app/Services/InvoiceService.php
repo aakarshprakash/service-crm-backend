@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Models\Invoice;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
+use App\Models\UpiAccount;
 use App\Support\Money;
+use App\Support\QrCode;
 use App\Support\Sequence;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\DB;
@@ -69,7 +71,35 @@ class InvoiceService
         ]);
         $tenant = Tenant::findOrFail($invoice->tenant_id);
         $money = fn (int $v) => Money::format($v, $tenant->currency);
+        $upi = $this->upi($invoice);
+        $upiQr = $upi ? QrCode::pngDataUri($upi['link'], 4) : null;
 
-        return Pdf::loadView('pdf.invoice', compact('invoice', 'tenant', 'money'))->setPaper('a4');
+        return Pdf::loadView('pdf.invoice', compact('invoice', 'tenant', 'money', 'upi', 'upiQr'))->setPaper('a4');
+    }
+
+    /**
+     * "Scan to pay" details for an invoice's balance, from the branch's (or company's) UPI account.
+     *
+     * @return array{account_id: int, name: string, vpa: string, payee_name: string, amount: int, link: string}|null
+     */
+    public function upi(Invoice $invoice): ?array
+    {
+        if ($invoice->balance_amount <= 0) {
+            return null;
+        }
+        $account = UpiAccount::forBranch($invoice->branch_id);
+        if (! $account) {
+            return null;
+        }
+        $tenant = Tenant::find($invoice->tenant_id);
+
+        return [
+            'account_id' => $account->id,
+            'name' => $account->name,
+            'vpa' => $account->vpa,
+            'payee_name' => $account->payee_name,
+            'amount' => $invoice->balance_amount,
+            'link' => $account->link($invoice->balance_amount, "Invoice {$invoice->invoice_number}", $tenant?->currency ?? 'INR'),
+        ];
     }
 }

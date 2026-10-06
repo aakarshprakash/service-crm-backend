@@ -15,7 +15,11 @@ use App\Models\Review;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Models\LeaveRequest;
+use App\Models\Payslip;
+use App\Services\AttendanceService;
 use App\Services\BooksService;
+use App\Services\LedgerService;
 use App\Support\Money;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonPeriod;
@@ -47,6 +51,12 @@ class ReportService
         'profit-loss' => ['Income vs Expenses', 'reports.financial', 'Money collected against money spent, day by day, with net profit.'],
         'day-book' => ['Day Book', 'reports.financial', 'Every payment received and every expense paid, in order.'],
         'walk-in-sales' => ['Walk-in Sales', 'reports.financial', 'Counter bills: services and parts sold, discounts, paid and balance.'],
+        'cash-book' => ['Cash Book', 'reports.financial', 'Cash received, cash paid out and deposits, with running balance.'],
+        'bank-book' => ['Bank Book', 'reports.financial', 'UPI, cheque, bank and online receipts, non-cash payments and transfers, with running balance.'],
+        'receipts' => ['Receipts Register', 'reports.financial', 'Every payment received, with receipt number, method and who collected it.'],
+        'attendance' => ['Attendance Summary', 'hr.view', 'Present, leave, absent and hours per staff member for the period.'],
+        'leave' => ['Leave Register', 'hr.view', 'Leave requests by staff member, type, dates and status.'],
+        'payroll' => ['Payroll Summary', 'payroll.manage', 'Gross, deductions, loss of pay and net pay per payslip for the months in the period.'],
     ];
 
     private Tenant $tenant;
@@ -192,6 +202,126 @@ class ReportService
             'Discounts' => $this->money($rows->sum('discount')),
             'Outstanding' => $this->money($rows->sum('balance')),
         ]);
+    }
+
+    private function cashBook(?int $limit): ReportResult
+    {
+        return $this->bookReport('cash', $limit);
+    }
+
+    private function bankBook(?int $limit): ReportResult
+    {
+        return $this->bookReport('bank', $limit);
+    }
+
+    private function bookReport(string $book, ?int $limit): ReportResult
+    {
+        [$from, $to] = $this->localDates();
+        $l = app(LedgerService::class)->ledger($this->tenant, $book, $from, $to);
+        $rows = collect($l['entries'])->take($limit ?? PHP_INT_MAX)->map(fn ($e) => [
+            'at' => $e['at'], 'type' => ucfirst($e['type']), 'ref' => $e['ref'], 'particulars' => $e['particulars'],
+            'method' => str_replace('_', ' ', $e['method']), 'in' => $e['in'], 'out' => $e['out'], 'balance' => $e['balance'], '_flag' => $e['balance'] < 0,
+        ]);
+
+        return new ReportResult([
+            'at' => ['Date', 'text'], 'type' => ['Type'], 'ref' => ['Ref'], 'particulars' => ['Particulars'], 'method' => ['Method'],
+            'in' => ['Receipts', 'money'], 'out' => ['Payments', 'money'], 'balance' => ['Balance', 'money'],
+        ], $rows->all(), [
+            'Opening balance' => $this->money($l['opening']), 'Receipts' => $this->money($l['total_in']),
+            'Payments' => $this->money($l['total_out']), 'Closing balance' => $this->money($l['closing']),
+        ]);
+    }
+
+    private function receipts(?int $limit): ReportResult
+    {
+        $q = Payment::query()->where('payments.status', 'success')
+            ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')
+            ->leftJoin('customers as c', 'c.id', '=', 'invoices.customer_id')
+            ->leftJoin('users as u', 'u.id', '=', 'payments.collected_by')
+            ->tap(fn ($q) => $this->dateRange($q, 'payments.paid_at'))
+            ->when($this->f('branch_id'), fn ($q, $v) => $q->where('invoices.branch_id', $v))
+            ->when($this->f('technician_id'), fn ($q, $v) => $q->where('payments.collected_by', $v))
+            ->orderBy('payments.paid_at');
+        $byMethod = (clone $q)->reorder()->selectRaw('payments.method as m, SUM(payments.amount) as t')->groupBy('m')->pluck('t', 'm');
+        $rows = $q->limit($limit ?? PHP_INT_MAX)->get([
+            'payments.paid_at', 'payments.receipt_number', 'invoices.invoice_number', 'c.name as customer', 'payments.method',
+            'payments.reference_no', 'u.name as collector', 'payments.amount',
+        ])->map(fn ($r) => [
+            'date' => $this->local($r->paid_at), 'receipt' => $r->receipt_number, 'invoice' => $r->invoice_number, 'customer' => $r->customer,
+            'method' => str_replace('_', ' ', $r->method), 'reference' => $r->reference_no, 'collected_by' => $r->collector ?? 'Office / online', 'amount' => (int) $r->amount,
+        ]);
+
+        return new ReportResult([
+            'date' => ['Date', 'datetime'], 'receipt' => ['Receipt'], 'invoice' => ['Invoice'], 'customer' => ['Customer'], 'method' => ['Method'],
+            'reference' => ['Reference'], 'collected_by' => ['Collected by'], 'amount' => ['Amount', 'money'],
+        ], $rows->all(), ['Total received' => $this->money($byMethod->sum())] + $byMethod->mapWithKeys(fn ($v, $k) => [ucwords(str_replace('_', ' ', $k)) => $this->money($v)])->all());
+    }
+
+    private function attendance(?int $limit): ReportResult
+    {
+        [$from, $to] = $this->localDates();
+        $users = User::inTenant($this->tenant->id)->where('role', '!=', 'customer')->where('status', 'active')
+            ->when($this->f('branch_id'), fn ($q, $v) => $q->where('branch_id', $v))
+            ->when($this->f('technician_id'), fn ($q, $v) => $q->where('id', $v))
+            ->with('branch:id,name')->orderBy('name')->limit($limit ?? PHP_INT_MAX)->get();
+        $svc = app(AttendanceService::class);
+        $days = $svc->days($this->tenant, $users, $from, $to);
+        $rows = $users->map(function (User $u) use ($svc, $days) {
+            $s = $svc->summarize($days[$u->id] ?? []);
+            $outside = collect($days[$u->id] ?? [])->where('outside', true)->count();
+
+            return [
+                'name' => $u->name, 'role' => $u->role->label(), 'branch' => $u->branch?->name, 'present' => $s['present'],
+                'paid_leave' => $s['paid_leave'], 'unpaid_leave' => $s['unpaid_leave'], 'absent' => $s['absent'], 'holidays' => $s['holidays'],
+                'weekly_offs' => $s['weekly_offs'], 'hours' => round($s['minutes'] / 60, 1), 'outside' => $outside, '_flag' => $s['absent'] >= 3,
+            ];
+        });
+
+        return new ReportResult([
+            'name' => ['Staff'], 'role' => ['Role'], 'branch' => ['Branch'], 'present' => ['Present', 'quantity'], 'paid_leave' => ['Paid leave', 'quantity'],
+            'unpaid_leave' => ['Unpaid leave', 'quantity'], 'absent' => ['Absent', 'quantity'], 'holidays' => ['Holidays', 'number'],
+            'weekly_offs' => ['Weekly offs', 'number'], 'hours' => ['Hours worked', 'quantity'], 'outside' => ['Punches outside fence', 'number'],
+        ], $rows->all(), ['Staff' => $rows->count(), 'Total absent days' => $rows->sum('absent')]);
+    }
+
+    private function leave(?int $limit): ReportResult
+    {
+        [$from, $to] = $this->localDates();
+        $rows = LeaveRequest::with(['user:id,name', 'type:id,name', 'decider:id,name'])
+            ->where('from_date', '<=', $to)->where('to_date', '>=', $from)
+            ->when($this->f('technician_id'), fn ($q, $v) => $q->where('user_id', $v))
+            ->when($this->f('status'), fn ($q, $v) => $q->where('status', $v))
+            ->orderBy('from_date')->limit($limit ?? PHP_INT_MAX)->get()
+            ->map(fn (LeaveRequest $l) => [
+                'name' => $l->user?->name, 'type' => $l->type?->name, 'from' => $l->from_date->toDateString(), 'to' => $l->to_date->toDateString(),
+                'days' => $l->days, 'status' => ucfirst($l->status), 'reason' => $l->reason, 'decided_by' => $l->decider?->name,
+            ]);
+
+        return new ReportResult([
+            'name' => ['Staff'], 'type' => ['Leave type'], 'from' => ['From', 'date'], 'to' => ['To', 'date'], 'days' => ['Days', 'quantity'],
+            'status' => ['Status'], 'reason' => ['Reason'], 'decided_by' => ['Decided by'],
+        ], $rows->all(), ['Requests' => $rows->count(), 'Approved days' => $rows->where('status', 'Approved')->sum('days')]);
+    }
+
+    private function payroll(?int $limit): ReportResult
+    {
+        [$from, $to] = $this->localDates();
+        $slips = Payslip::query()->join('payroll_runs as r', 'r.id', '=', 'payslips.payroll_run_id')
+            ->join('users as u', 'u.id', '=', 'payslips.user_id')
+            ->whereBetween('r.month', [substr($from, 0, 7), substr($to, 0, 7)])
+            ->when($this->f('technician_id'), fn ($q, $v) => $q->where('payslips.user_id', $v))
+            ->orderBy('r.month')->orderBy('u.name')->limit($limit ?? PHP_INT_MAX)
+            ->get(['payslips.*', 'r.month', 'r.status as run_status', 'u.name as staff']);
+        $rows = $slips->map(fn ($p) => [
+            'month' => $p->month, 'name' => $p->staff, 'status' => ucfirst($p->run_status), 'present' => $p->present_days, 'lop_days' => $p->lop_days,
+            'gross' => $p->gross, 'bonus' => $p->bonus, 'deductions' => array_sum(array_column($p->deductions ?? [], 'amount')) + $p->other_deduction,
+            'lop' => $p->lop_amount, 'net' => $p->net_pay,
+        ]);
+
+        return new ReportResult([
+            'month' => ['Month'], 'name' => ['Staff'], 'status' => ['Payroll'], 'present' => ['Present', 'quantity'], 'lop_days' => ['LOP days', 'quantity'],
+            'gross' => ['Gross', 'money'], 'bonus' => ['Bonus', 'money'], 'deductions' => ['Deductions', 'money'], 'lop' => ['Loss of pay', 'money'], 'net' => ['Net pay', 'money'],
+        ], $rows->all(), ['Payslips' => $rows->count(), 'Gross' => $this->money($rows->sum('gross')), 'Net pay' => $this->money($rows->sum('net'))]);
     }
 
     /** The report period as local Y-m-d dates (for DATE columns). @return array{0: string, 1: string} */

@@ -25,7 +25,14 @@ return [
     'jobs.view' => [...$staff, 'technician'],
     'jobs.manage' => ['admin', 'coordinator'],
     'visits.execute' => ['technician'],
-    'punch' => ['technician'],
+    'punch' => [...$staff, 'technician'], // v2.1: office staff punch too (geo-fenced attendance)
+
+    // HR (v2.1)
+    'self.service' => [...$staff, 'technician'], // own attendance, leave, payslips
+    'hr.view' => ['admin', 'coordinator'],        // attendance register / who's in today
+    'hr.manage' => ['admin'],                     // correct attendance
+    'leave.approve' => ['admin', 'coordinator'],
+    'payroll.manage' => ['admin', 'accountant'],  // salaries, employee HR details, payroll
 
     'billing.walkin' => $staff,
     'expenses.manage' => ['admin', 'accountant'],

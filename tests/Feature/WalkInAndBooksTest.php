@@ -95,7 +95,7 @@ class WalkInAndBooksTest extends TestCase
             'amount' => 30000, 'payment_method' => 'cash', 'paid_to' => 'HP petrol pump',
         ])->assertCreated()->assertJsonPath('data.category.name', 'Fuel & travel');
 
-        $this->getJson('/api/v1/expenses')->assertOk()->assertJsonPath('meta.total', 30000)->assertJsonPath('meta.by_category.Fuel & travel', 30000);
+        $this->getJson('/api/v1/expenses')->assertOk()->assertJsonPath('meta.total', 1)->assertJsonPath('meta.total_amount', 30000)->assertJsonPath('meta.by_category.Fuel & travel', 30000);
 
         $this->getJson('/api/v1/books/summary')->assertOk()
             ->assertJsonPath('data.income', 80000)

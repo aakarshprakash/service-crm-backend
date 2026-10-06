@@ -11,10 +11,14 @@ use App\Models\ComplaintType;
 use App\Models\Dealer;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
+use App\Models\Holiday;
+use App\Models\LeaveRequest;
+use App\Models\LeaveType;
 use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ServiceJob;
 use App\Models\ServiceLocation;
+use App\Models\UpiAccount;
 use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
@@ -40,6 +44,9 @@ class MasterDataController extends Controller
         'branches' => Branch::class,
         'service-locations' => ServiceLocation::class,
         'expense-categories' => ExpenseCategory::class,
+        'upi-accounts' => UpiAccount::class,
+        'leave-types' => LeaveType::class,
+        'holidays' => Holiday::class,
     ];
 
     /** All active lookups in one call for forms (cached per request by the client). */
@@ -58,6 +65,8 @@ class MasterDataController extends Controller
             'action_taken_options' => $active(ActionTakenOption::class),
             'service_locations' => ServiceLocation::where('is_active', true)->orderBy('name')->get(['id', 'name', 'city', 'pincodes']),
             'expense_categories' => $active(ExpenseCategory::class),
+            'upi_accounts' => UpiAccount::where('is_active', true)->orderByDesc('is_default')->orderBy('name')->get(['id', 'name', 'vpa', 'payee_name', 'branch_id', 'is_default']),
+            'leave_types' => LeaveType::where('is_active', true)->orderBy('name')->get(['id', 'name', 'code', 'annual_quota', 'is_paid']),
         ]);
     }
 
@@ -76,6 +85,10 @@ class MasterDataController extends Controller
             $query->with('complaintType:id,name')->orderBy('name');
         } elseif ($type === 'service-locations') {
             $query->with('technicians:id,name')->withCount('technicians')->orderBy('name');
+        } elseif ($type === 'upi-accounts') {
+            $query->with('branch:id,name')->orderByDesc('is_default')->orderBy('name');
+        } elseif ($type === 'holidays') {
+            $query->when($request->filled('year'), fn ($q) => $q->whereYear('date', $request->integer('year')))->orderBy('date');
         } else {
             $query->orderBy('name');
         }
@@ -120,6 +133,11 @@ class MasterDataController extends Controller
             $record->update(['is_active' => false]);
 
             return $this->ok($record, 'This location is used by jobs, so it was deactivated instead of deleted.');
+        }
+        if ($type === 'leave-types' && LeaveRequest::where('leave_type_id', $record->id)->exists()) {
+            $record->update(['is_active' => false]);
+
+            return $this->ok($record, 'This leave type has been used, so it was deactivated instead of deleted.');
         }
         if ($type === 'expense-categories' && Expense::where('expense_category_id', $record->id)->exists()) {
             $record->update(['is_active' => false]);
@@ -190,6 +208,30 @@ class MasterDataController extends Controller
                 'state' => ['nullable', 'string', 'max:100'],
                 'pincode' => ['nullable', 'string', 'max:12'],
                 'phone' => ['nullable', 'string', 'max:20'],
+                'lat' => ['nullable', 'numeric', 'between:-90,90', 'required_with:geofence_radius'],
+                'lng' => ['nullable', 'numeric', 'between:-180,180', 'required_with:geofence_radius'],
+                'geofence_radius' => ['nullable', 'integer', 'min:25', 'max:50000'],
+                'is_active' => ['boolean'],
+            ],
+            'upi-accounts' => [
+                'name' => [$sometimes, 'string', 'max:100', $uniqueName],
+                // name@bank — what UPI apps call the "UPI ID" / VPA.
+                'vpa' => [$sometimes, 'string', 'max:100', 'regex:/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-]{1,63}$/'],
+                'payee_name' => [$sometimes, 'string', 'max:100'],
+                'branch_id' => ['nullable', 'integer', $exists('branches')],
+                'is_default' => ['boolean'],
+                'is_active' => ['boolean'],
+            ],
+            'leave-types' => [
+                'name' => [$sometimes, 'string', 'max:100', $uniqueName],
+                'code' => ['nullable', 'string', 'max:10'],
+                'annual_quota' => ['nullable', 'numeric', 'min:0', 'max:365'],
+                'is_paid' => ['boolean'],
+                'is_active' => ['boolean'],
+            ],
+            'holidays' => [
+                'date' => [$sometimes, 'date', Rule::unique('holidays', 'date')->where('tenant_id', $tenantId)->ignore($record?->id)],
+                'name' => [$sometimes, 'string', 'max:150'],
                 'is_active' => ['boolean'],
             ],
             'service-locations' => [

@@ -85,7 +85,7 @@ class PortalAndReportsTest extends TestCase
         $this->actingAsUser($admin);
 
         $reports = collect($this->getJson('/api/v1/reports')->assertOk()->json('data'))->pluck('key');
-        $this->assertCount(16, $reports);
+        $this->assertCount(22, $reports); // 16 + 6 added in v2.1 (books, receipts, HR)
 
         foreach ($reports as $key) {
             $this->getJson("/api/v1/reports/{$key}?from=".now()->subMonth()->toDateString().'&to='.now()->toDateString())

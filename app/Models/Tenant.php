@@ -30,6 +30,8 @@ class Tenant extends Model
         'tutorial_mode' => false,
         'auto_assign_max_jobs' => 10,
         'auto_assign_on_duty_only' => false,
+        // Geo-fenced attendance: off | flag (record outside punches) | enforce (block them).
+        'attendance' => ['geofence' => 'off', 'geofence_technicians' => false, 'require_location' => false],
     ];
 
     protected function casts(): array

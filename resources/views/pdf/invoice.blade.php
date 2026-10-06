@@ -132,6 +132,16 @@
                     <div class="muted">{{ $payment->paid_at?->timezone($tz)->format('d M Y') }} · {{ ucwords(str_replace('_', ' ', $payment->method)) }} · {{ $money($payment->amount) }}{{ $payment->receipt_number ? ' · '.$payment->receipt_number : '' }}</div>
                 @endforeach
             @endif
+            @if ($upiQr)
+                <table style="margin-top:10px; width:auto"><tr>
+                    <td style="vertical-align:top; padding:0"><img src="{{ $upiQr }}" alt="UPI QR" style="width:105px; height:105px"></td>
+                    <td style="vertical-align:middle; padding-left:8px">
+                        <div style="font-weight:bold; font-size:11px">Scan to pay {{ $money($upi['amount']) }}</div>
+                        <div class="muted">Any UPI app · {{ $upi['vpa'] }}</div>
+                        <div class="muted">{{ $upi['payee_name'] }}</div>
+                    </td>
+                </tr></table>
+            @endif
         </td>
         <td style="width:45%">
             <table class="totals">

@@ -39,6 +39,7 @@ class PublicPaymentController extends Controller
             'balance_amount' => $invoice->balance_amount,
             'payment_status' => $invoice->payment_status,
             'online_payments' => $tenant->onlinePaymentsEnabled(),
+            'upi' => app(TenantContext::class)->runAs($invoice->tenant_id, fn () => $this->invoices->upi($invoice)),
         ]);
     }
 

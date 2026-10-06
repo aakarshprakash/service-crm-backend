@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
 use App\Http\Controllers\Api\V1\ExpenseController;
+use App\Http\Controllers\Api\V1\HrController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CashCloseController;
 use App\Http\Controllers\Api\V1\CustomerController;
@@ -32,6 +33,9 @@ Route::prefix('v1')->group(function () {
     // ---- Public -----------------------------------------------------------
     Route::middleware('throttle:public')->group(function () {
         Route::get('plans', [AuthController::class, 'plans']);
+        Route::get('version', fn () => response()->json(['data' => [
+            'version' => config('app.version'), 'min_mobile_version' => config('app.min_mobile_version'),
+        ]]));
         Route::get('portal/company/{slug}', [AuthController::class, 'portalCompany'])->where('slug', '[a-z0-9-]+');
         Route::get('pay/{token}', [PublicPaymentController::class, 'show']);
         Route::get('pay/{token}/pdf', [PublicPaymentController::class, 'pdf']);
@@ -106,7 +110,7 @@ Route::prefix('v1')->group(function () {
             Route::patch('users/{id}/status', [UserController::class, 'setStatus'])->whereNumber('id');
             Route::post('users/{id}/invite', [UserController::class, 'resendInvite'])->whereNumber('id');
         });
-        Route::post('punch', [UserController::class, 'punch'])->middleware('can:punch');
+        Route::post('punch', [HrController::class, 'punch'])->middleware('can:punch');
 
         // Master data (§5.14)
         Route::get('master/lookups', [MasterDataController::class, 'lookups'])->middleware('can:master.view');
@@ -175,6 +179,52 @@ Route::prefix('v1')->group(function () {
         Route::middleware('can:accounts.view')->group(function () {
             Route::get('books/summary', [BooksController::class, 'summary']);
             Route::get('books/day-book', [BooksController::class, 'dayBook']);
+            Route::get('books/overview', [BooksController::class, 'overview']);
+            Route::get('books/ledger', [BooksController::class, 'ledger']);
+            Route::get('books/receivables', [BooksController::class, 'receivables']);
+            Route::get('books/profit-loss', [BooksController::class, 'profitLoss']);
+            Route::get('books/transfers', [BooksController::class, 'transfers']);
+        });
+        Route::middleware('can:expenses.manage')->group(function () {
+            Route::put('books/opening', [BooksController::class, 'updateOpening']);
+            Route::post('books/transfers', [BooksController::class, 'storeTransfer']);
+            Route::delete('books/transfers/{id}', [BooksController::class, 'destroyTransfer'])->whereNumber('id');
+        });
+
+        // HR (v2.1): self service for every staff member…
+        Route::middleware('can:self.service')->prefix('my')->group(function () {
+            Route::get('attendance', [HrController::class, 'myAttendance']);
+            Route::get('leaves', [HrController::class, 'myLeaves']);
+            Route::post('leaves', [HrController::class, 'applyLeave']);
+            Route::post('leaves/{id}/cancel', [HrController::class, 'cancelLeave'])->whereNumber('id');
+            Route::get('payslips', [HrController::class, 'myPayslips']);
+            Route::get('payslips/{id}/pdf', [HrController::class, 'myPayslipPdf'])->whereNumber('id');
+        });
+        // …and management.
+        Route::prefix('hr')->group(function () {
+            Route::middleware('can:hr.view')->group(function () {
+                Route::get('attendance/daily', [HrController::class, 'daily']);
+                Route::get('attendance/register', [HrController::class, 'register']);
+            });
+            Route::post('attendance/adjust', [HrController::class, 'adjust'])->middleware('can:hr.manage');
+            Route::middleware('can:leave.approve')->group(function () {
+                Route::get('leave-requests', [HrController::class, 'leaveRequests']);
+                Route::patch('leave-requests/{id}', [HrController::class, 'decideLeave'])->whereNumber('id');
+                Route::get('leave-balances', [HrController::class, 'leaveBalances']);
+            });
+            Route::middleware('can:payroll.manage')->group(function () {
+                Route::get('employees', [HrController::class, 'employees']);
+                Route::get('employees/{userId}', [HrController::class, 'employee'])->whereNumber('userId');
+                Route::put('employees/{userId}', [HrController::class, 'updateEmployee'])->whereNumber('userId');
+                Route::get('payroll', [HrController::class, 'payrollRuns']);
+                Route::post('payroll', [HrController::class, 'generatePayroll']);
+                Route::get('payroll/{id}', [HrController::class, 'payrollRun'])->whereNumber('id');
+                Route::delete('payroll/{id}', [HrController::class, 'deletePayroll'])->whereNumber('id');
+                Route::patch('payroll/{id}/payslips/{slipId}', [HrController::class, 'adjustPayslip'])->whereNumber(['id', 'slipId']);
+                Route::post('payroll/{id}/finalize', [HrController::class, 'finalizePayroll'])->whereNumber('id');
+                Route::post('payroll/{id}/pay', [HrController::class, 'payPayroll'])->whereNumber('id');
+                Route::get('payslips/{id}/pdf', [HrController::class, 'payslipPdf'])->whereNumber('id');
+            });
         });
 
         // Assets: company tools / vehicles / devices issued to technicians.
