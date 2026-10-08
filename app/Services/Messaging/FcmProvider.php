@@ -24,7 +24,8 @@ class FcmProvider implements MessagingProviderInterface
                 'message' => [
                     'token' => $to,
                     'notification' => ['title' => $meta['title'] ?? config('app.name'), 'body' => $message],
-                    'data' => array_map('strval', $meta['data'] ?? []),
+                    // FCM wants a JSON object; an empty PHP array would encode as [] and be rejected.
+                    'data' => (object) array_map('strval', $meta['data'] ?? []),
                     // "default" is the channel the technician app creates (high importance, sound).
                     'android' => ['priority' => 'high', 'notification' => ['channel_id' => 'default', 'sound' => 'default', 'default_vibrate_timings' => true]],
                 ],

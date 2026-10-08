@@ -52,6 +52,7 @@ class PushNotificationTest extends TestCase
             'oauth2.googleapis.com/*' => Http::response(['access_token' => 'ya29.test']),
             'fcm.googleapis.com/*' => Http::sequence()
                 ->push(['name' => 'projects/servon-test/messages/1'])
+                ->push(['name' => 'projects/servon-test/messages/2'])
                 ->push(['error' => ['code' => 404, 'message' => 'Requested entity was not found.', 'details' => [['errorCode' => 'UNREGISTERED']]]], 404),
         ]);
         $fcm = new FcmProvider(['credentials' => $path]);
@@ -59,8 +60,12 @@ class PushNotificationTest extends TestCase
         $ok = $fcm->send('tok', 'Job SC-1 assigned', ['title' => 'New job', 'data' => ['job_id' => 5]]);
         $this->assertTrue($ok['ok']);
         Http::assertSent(fn ($r) => str_contains($r->url(), 'fcm.googleapis.com')
-            && $r['message']['android']['notification']['channel_id'] === 'default'
-            && $r['message']['data']['job_id'] === '5');
+            && json_decode($r->body(), true)['message']['android']['notification']['channel_id'] === 'default'
+            && (json_decode($r->body(), true)['message']['data']['job_id'] ?? null) === '5');
+
+        // No extra data must still encode as a JSON object ({}), not a list ([]).
+        $this->assertTrue($fcm->send('tok', 'Reminder')['ok']);
+        Http::assertSent(fn ($r) => str_contains($r->url(), 'fcm.googleapis.com') && str_contains($r->body(), '"data":{}'));
 
         $dead = $fcm->send('tok', 'x');
         $this->assertFalse($dead['ok']);
