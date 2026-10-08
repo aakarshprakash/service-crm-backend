@@ -25,11 +25,22 @@ class FcmProvider implements MessagingProviderInterface
                     'token' => $to,
                     'notification' => ['title' => $meta['title'] ?? config('app.name'), 'body' => $message],
                     'data' => array_map('strval', $meta['data'] ?? []),
-                    'android' => ['priority' => 'high'],
+                    // "default" is the channel the technician app creates (high importance, sound).
+                    'android' => ['priority' => 'high', 'notification' => ['channel_id' => 'default', 'sound' => 'default', 'default_vibrate_timings' => true]],
                 ],
             ]);
 
-        return ['ok' => $response->successful(), 'error' => $response->successful() ? null : $response->json('error.message')];
+        if ($response->successful()) {
+            return ['ok' => true, 'error' => null];
+        }
+        $code = collect($response->json('error.details') ?? [])->pluck('errorCode')->filter()->first();
+
+        return [
+            'ok' => false,
+            'error' => $response->json('error.message') ?? 'FCM HTTP '.$response->status(),
+            // The app was uninstalled or the token rotated: stop sending to it.
+            'invalid_token' => $code === 'UNREGISTERED' || ($code === 'INVALID_ARGUMENT' && str_contains((string) $response->json('error.message'), 'registration token')),
+        ];
     }
 
     private function accessToken(array $credentials): string

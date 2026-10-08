@@ -9,6 +9,7 @@ use App\Models\DeviceToken;
 use App\Models\SubscriptionPlan;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\NotificationService;
 use App\Services\OtpService;
 use App\Services\TenantProvisioningService;
 use App\Support\Audit;
@@ -126,6 +127,10 @@ class AuthController extends Controller
 
     public function logout(Request $request): JsonResponse
     {
+        // The phone stops receiving this user's push notifications once they sign out.
+        if ($request->filled('device_token') && $request->user()) {
+            DeviceToken::where('user_id', $request->user()->id)->where('token', (string) $request->input('device_token'))->delete();
+        }
         $token = $request->user()?->currentAccessToken();
         if ($token instanceof PersonalAccessToken) {
             $token->delete();
@@ -353,6 +358,24 @@ class AuthController extends Controller
         return $this->ok(null, 'Device registered.');
     }
 
+    /** Sends a test push to the signed-in user's phones, so technicians can check notifications work. */
+    public function testPush(Request $request, NotificationService $notifications): JsonResponse
+    {
+        $user = $request->user();
+        $devices = $user->deviceTokens()->count();
+        if ($devices === 0) {
+            abort(422, 'This phone is not registered for notifications yet. Allow notifications for the app and sign in again.');
+        }
+        $notifications->notifyUser($user, 'test', 'Notifications are working', 'You will get a notification like this when a job is assigned to you.', ['test' => 1]);
+
+        return $this->ok([
+            'devices' => $devices,
+            'driver' => config('services.messaging.push'),
+        ], config('services.messaging.push') === 'fcm'
+            ? 'Test notification sent. It should arrive in a few seconds.'
+            : 'Push is not configured on the server yet (PUSH_DRIVER is not "fcm"). Ask your administrator.');
+    }
+
     private function attempt(string $email, string $password): User
     {
         $user = User::where('email', $email)->first();
@@ -426,6 +449,7 @@ class AuthController extends Controller
                 'online_payments' => $tenant->onlinePaymentsEnabled(),
                 'portal_enabled' => $tenant->portalEnabled(),
                 'tutorial_mode' => (bool) $tenant->setting('tutorial_mode'),
+                'require_signature' => (bool) $tenant->setting('jobs.require_signature', false),
             ] : null,
         ];
     }

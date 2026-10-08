@@ -75,20 +75,40 @@ class VisitController extends Controller
         return $this->ok($visit, 'Saved.');
     }
 
-    /** FR-8.1 / FR-8.2 image upload (client compresses before upload). */
+    /**
+     * FR-8.1 / FR-8.2 image upload. Clients downscale first; full-size camera photos are
+     * still accepted and shrunk server-side (ImageOptimizer).
+     */
     public function uploadImage(Request $request, int $id): JsonResponse
     {
         $data = $request->validate([
             'type' => ['required', Rule::in(['bill', 'serial', 'complaint_part', 'new_part', 'other'])],
-            'image' => ['required', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:8192', 'dimensions:max_width=8000,max_height=8000'],
+            'image' => ['required', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:25600', 'dimensions:max_width=12000,max_height=12000'],
+        ], [
+            'image.max' => 'The photo is too large (over 25 MB). Retake it at a lower resolution.',
+            'image.uploaded' => 'The photo could not be received. Check the connection and try again.',
         ]);
         $visit = $this->ownVisit($request, $id);
-        if ($visit->images()->count() >= 30) {
+        if ($visit->images()->where('type', '!=', 'signature')->count() >= 30) {
             abort(422, 'Image limit reached for this visit.');
         }
         $image = $this->visits->uploadImage($visit, $data['type'], $data['image'], $request->user());
 
         return $this->created($image, 'Image uploaded.');
+    }
+
+    /** Customer signature captured on the technician's device after the work is done. */
+    public function sign(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'signature' => ['required', 'file', 'mimes:png', 'max:2048', 'dimensions:min_width=100,min_height=50,max_width=4000,max_height=4000'],
+            'signer_name' => ['required', 'string', 'max:100'],
+        ], [
+            'signer_name.required' => 'Enter the name of the person signing.',
+        ]);
+        $visit = $this->visits->sign($this->ownVisit($request, $id), $data['signature'], trim($data['signer_name']), $request->user());
+
+        return $this->ok($visit, 'Signature saved.');
     }
 
     public function deleteImage(Request $request, int $id, int $imageId): JsonResponse

@@ -156,6 +156,18 @@
     </tr>
 </table>
 
+@if ($signature)
+    <table style="margin-top:18px; width:auto; margin-left:auto">
+        <tr><td style="text-align:center; padding:0 4px">
+            <img src="{{ $signature['src'] }}" alt="Customer signature" style="height:60px; max-width:220px">
+            <div style="border-top:1px solid #d1d5db; margin-top:2px; padding-top:3px; font-size:10px">
+                Customer signature{{ $signature['name'] ? ' – '.$signature['name'] : '' }}
+            </div>
+            <div class="muted" style="font-size:9px">Signed {{ $signature['at']->timezone($tz)->format('d M Y, h:i A') }}</div>
+        </td></tr>
+    </table>
+@endif
+
 <div class="footer">This is a computer-generated invoice. Thank you for choosing {{ $tenant->name }}.</div>
 </body>
 </html>

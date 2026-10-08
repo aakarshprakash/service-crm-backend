@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Invoice;
+use App\Models\JobImage;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\UpiAccount;
@@ -11,6 +12,7 @@ use App\Support\QrCode;
 use App\Support\Sequence;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class InvoiceService
@@ -73,8 +75,27 @@ class InvoiceService
         $money = fn (int $v) => Money::format($v, $tenant->currency);
         $upi = $this->upi($invoice);
         $upiQr = $upi ? QrCode::pngDataUri($upi['link'], 4) : null;
+        $signature = $this->signature($invoice);
 
-        return Pdf::loadView('pdf.invoice', compact('invoice', 'tenant', 'money', 'upi', 'upiQr'))->setPaper('a4');
+        return Pdf::loadView('pdf.invoice', compact('invoice', 'tenant', 'money', 'upi', 'upiQr', 'signature'))->setPaper('a4');
+    }
+
+    /** Latest customer sign-off on the invoice's job, embedded as a data URI. */
+    private function signature(Invoice $invoice): ?array
+    {
+        if (! $invoice->job_id) {
+            return null;
+        }
+        $image = JobImage::where('job_id', $invoice->job_id)->where('type', 'signature')->with('visit')->latest('id')->first();
+        if (! $image || ! Storage::disk('private')->exists($image->file_path)) {
+            return null;
+        }
+
+        return [
+            'src' => 'data:image/png;base64,'.base64_encode(Storage::disk('private')->get($image->file_path)),
+            'name' => $image->visit?->signer_name,
+            'at' => $image->visit?->signed_at ?? $image->created_at,
+        ];
     }
 
     /**

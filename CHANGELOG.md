@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Customer signature on visits.** `POST /visits/{id}/signature` (PNG + `signer_name`; signing again replaces it). Stored as a `signature` job image; the visit records `signer_name` and `signed_at`. Printed on the invoice PDF. Company setting `jobs.require_signature` blocks completing a visit without one; exposed to apps as `tenant.require_signature`.
+- `POST /auth/device/test` sends a test push to the signed-in user's phones.
+
+### Changed
+- **Photo uploads accept full-size camera photos** (up to 25 MB, 12000 px). Large or rotated images are re-encoded server-side to a 2000 px JPEG with EXIF orientation applied (`App\Support\ImageOptimizer`). Docker PHP/nginx upload limits raised to 30 / 32 MB. Signatures don't count towards the 30-photo limit.
+- FCM messages use the app's `default` Android channel with sound; tokens reported `UNREGISTERED` are removed.
+- `POST /auth/logout` accepts `device_token` so the phone stops receiving the signed-out user's notifications.
+
+### Fixed
+- 8 MB+ camera photos were rejected with "The image field must not be greater than 8192 kilobytes."
+
 ## 2.1.0 — 2026-10-06
 
 ### Added

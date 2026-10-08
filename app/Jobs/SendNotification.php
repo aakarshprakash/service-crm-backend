@@ -47,7 +47,7 @@ class SendNotification implements ShouldQueue
         $log->update(['status' => 'failed', 'error' => mb_substr((string) $result['error'], 0, 500)]);
 
         // Drop dead FCM tokens instead of retrying forever.
-        if ($log->channel === 'push' && str_contains((string) $result['error'], 'not found')) {
+        if ($log->channel === 'push' && (($result['invalid_token'] ?? false) || str_contains((string) $result['error'], 'not found'))) {
             DeviceToken::where('token', $log->recipient)->delete();
 
             return;

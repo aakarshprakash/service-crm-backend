@@ -74,6 +74,7 @@ Route::prefix('v1')->group(function () {
             Route::post('two-factor/confirm', [AuthController::class, 'twoFactorConfirm'])->middleware('throttle:login');
             Route::delete('two-factor', [AuthController::class, 'twoFactorDisable']);
             Route::post('device', [AuthController::class, 'registerDevice']);
+            Route::post('device/test', [AuthController::class, 'testPush'])->middleware('throttle:5,1');
         });
         Route::post('impersonation/stop', [PlatformController::class, 'stopImpersonating']);
 
@@ -161,6 +162,7 @@ Route::prefix('v1')->group(function () {
             Route::get('visits/{id}', [VisitController::class, 'show'])->whereNumber('id');
             Route::patch('visits/{id}', [VisitController::class, 'update'])->whereNumber('id');
             Route::post('visits/{id}/images', [VisitController::class, 'uploadImage'])->whereNumber('id')->middleware('throttle:uploads');
+            Route::post('visits/{id}/signature', [VisitController::class, 'sign'])->whereNumber('id')->middleware('throttle:uploads');
             Route::delete('visits/{id}/images/{imageId}', [VisitController::class, 'deleteImage'])->whereNumber(['id', 'imageId']);
             Route::post('visits/{id}/spares', [VisitController::class, 'addSpare'])->whereNumber('id');
             Route::delete('visits/{id}/spares/{usageId}', [VisitController::class, 'removeSpare'])->whereNumber(['id', 'usageId']);

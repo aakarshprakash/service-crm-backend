@@ -12,6 +12,7 @@ use App\Models\JobVisit;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\ImageOptimizer;
 use App\Support\Money;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -124,11 +125,17 @@ class VisitService
     public function uploadImage(JobVisit $visit, string $type, UploadedFile $file, User $user): JobImage
     {
         $this->ensureOpen($visit);
-        $path = $file->storeAs(
-            "tenants/{$visit->tenant_id}/jobs/{$visit->job_id}",
-            Str::uuid().'.'.($file->guessExtension() ?: 'jpg'),
-            'private'
-        );
+        $dir = "tenants/{$visit->tenant_id}/jobs/{$visit->job_id}";
+        $optimized = ImageOptimizer::shrink($file->getRealPath());
+        if ($optimized) {
+            [$bytes, $ext] = $optimized;
+            $path = $dir.'/'.Str::uuid().'.'.$ext;
+            Storage::disk('private')->put($path, $bytes);
+            $size = strlen($bytes);
+        } else {
+            $path = $file->storeAs($dir, Str::uuid().'.'.($file->guessExtension() ?: 'jpg'), 'private');
+            $size = $file->getSize();
+        }
 
         return JobImage::create([
             'job_id' => $visit->job_id,
@@ -136,9 +143,36 @@ class VisitService
             'type' => $type,
             'file_path' => $path,
             'original_name' => mb_substr($file->getClientOriginalName(), 0, 200),
-            'size' => $file->getSize(),
+            'size' => $size,
             'uploaded_by' => $user->id,
         ]);
+    }
+
+    /** Customer sign-off; signing again replaces the earlier signature. */
+    public function sign(JobVisit $visit, UploadedFile $file, string $signerName, User $user): JobVisit
+    {
+        $this->ensureOpen($visit);
+        $previous = JobImage::where('job_visit_id', $visit->id)->where('type', 'signature')->get();
+        $path = $file->storeAs("tenants/{$visit->tenant_id}/jobs/{$visit->job_id}", Str::uuid().'.png', 'private');
+
+        DB::transaction(function () use ($visit, $file, $path, $signerName, $user, $previous) {
+            JobImage::create([
+                'job_id' => $visit->job_id,
+                'job_visit_id' => $visit->id,
+                'type' => 'signature',
+                'file_path' => $path,
+                'original_name' => 'signature.png',
+                'size' => $file->getSize(),
+                'uploaded_by' => $user->id,
+            ]);
+            JobImage::whereKey($previous->modelKeys())->delete();
+            $visit->update(['signer_name' => $signerName, 'signed_at' => now()]);
+        });
+        foreach ($previous as $old) {
+            Storage::disk('private')->delete($old->file_path);
+        }
+
+        return $visit->fresh('images');
     }
 
     public function deleteImage(JobImage $image): void
@@ -179,6 +213,11 @@ class VisitService
             }
             if (in_array($method, ['credit', 'online'], true)) {
                 $collect = 0;
+            }
+
+            if ($status === 'completed' && Tenant::findOrFail($visit->tenant_id)->setting('jobs.require_signature', false)
+                && ! JobImage::where('job_visit_id', $visit->id)->where('type', 'signature')->exists()) {
+                throw ValidationException::withMessages(['signature' => 'Take the customer\'s signature before completing the visit.']);
             }
 
             $end = now();

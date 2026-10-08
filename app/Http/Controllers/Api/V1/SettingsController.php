@@ -74,6 +74,8 @@ class SettingsController extends Controller
             'tutorial_mode' => ['sometimes', 'boolean'],
             'auto_assign_max_jobs' => ['sometimes', 'integer', 'min:1', 'max:500'],
             'auto_assign_on_duty_only' => ['sometimes', 'boolean'],
+            'jobs' => ['sometimes', 'array'],
+            'jobs.require_signature' => ['sometimes', 'boolean'],
             'attendance' => ['sometimes', 'array'],
             'attendance.geofence' => ['sometimes', Rule::in(['off', 'flag', 'enforce'])],
             'attendance.geofence_technicians' => ['sometimes', 'boolean'],

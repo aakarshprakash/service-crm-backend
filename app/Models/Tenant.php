@@ -30,6 +30,8 @@ class Tenant extends Model
         'tutorial_mode' => false,
         'auto_assign_max_jobs' => 10,
         'auto_assign_on_duty_only' => false,
+        // Customer sign-off: when on, a visit can only be completed after the customer signs.
+        'jobs' => ['require_signature' => false],
         // Geo-fenced attendance: off | flag (record outside punches) | enforce (block them).
         'attendance' => ['geofence' => 'off', 'geofence_technicians' => false, 'require_location' => false],
     ];

@@ -15,7 +15,7 @@ class JobVisit extends Model
     protected $fillable = [
         'job_id', 'technician_id', 'visit_date', 'service_type', 'start_time', 'end_time', 'duration_seconds', 'status',
         'action_taken_id', 'service_summary', 'assisted_staff_id', 'labour_charge', 'spare_charge', 'total_charge',
-        'payment_method', 'amount_collected', 'location_lat', 'location_lng', 'end_lat', 'end_lng',
+        'payment_method', 'amount_collected', 'location_lat', 'location_lng', 'end_lat', 'end_lng', 'signer_name', 'signed_at',
     ];
 
     protected function casts(): array
@@ -24,6 +24,7 @@ class JobVisit extends Model
             'visit_date' => 'date:Y-m-d',
             'start_time' => 'datetime',
             'end_time' => 'datetime',
+            'signed_at' => 'datetime',
             'labour_charge' => 'integer',
             'spare_charge' => 'integer',
             'total_charge' => 'integer',
