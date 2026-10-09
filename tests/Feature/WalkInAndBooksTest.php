@@ -75,7 +75,8 @@ class WalkInAndBooksTest extends TestCase
 
     public function test_rejected_payment_or_short_stock_leaves_nothing_behind(): void
     {
-        $this->bill(['payment_method' => 'upi'])->assertStatus(422)->assertJsonValidationErrors('reference_no');
+        // Cheque needs its number; a UPI reference is optional.
+        $this->bill(['payment_method' => 'cheque'])->assertStatus(422)->assertJsonValidationErrors('reference_no');
         $this->bill(['items' => [['type' => 'part', 'item_id' => $this->part->id, 'quantity' => 50]], 'discount' => 0, 'amount_paid' => 0])
             ->assertStatus(422)->assertJsonValidationErrors('quantity');
         // Paying more than the bill rolls the whole bill back.

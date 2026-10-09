@@ -13,13 +13,14 @@ class Customer extends Model
 {
     use Auditable, BelongsToTenant, SoftDeletes;
 
-    protected $fillable = ['branch_id', 'crm_id', 'name', 'phone', 'alt_phone', 'email', 'address', 'city', 'state', 'pincode', 'lat', 'lng'];
+    protected $fillable = ['branch_id', 'crm_id', 'name', 'phone', 'alt_phone', 'email', 'address', 'city', 'state', 'pincode', 'lat', 'lng', 'location_updated_at', 'location_source'];
 
     protected function casts(): array
     {
         return [
             'lat' => 'float',
             'lng' => 'float',
+            'location_updated_at' => 'datetime',
         ];
     }
 

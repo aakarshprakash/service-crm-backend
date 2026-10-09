@@ -25,10 +25,11 @@ class NotificationService
         'payment_link' => 'Dear {customer_name}, please pay {balance} for invoice {invoice_number} ({company}): {pay_link}',
         'payment_received' => 'Dear {customer_name}, we received {amount} for invoice {invoice_number}. Receipt {receipt_number}. Thank you - {company}.',
         'followup_reminder' => 'Dear {customer_name}, a follow-up service {call_id} is scheduled on {scheduled_at}. - {company}',
+        'location_request' => 'Dear {customer_name}, please share your location for service request {call_id} so our technician can reach you: {location_link} - {company}',
         'otp' => '{otp} is your {company} verification code. It expires in 5 minutes. Do not share it with anyone.',
     ];
 
-    public const EVENTS = ['job_created', 'technician_assigned', 'job_completed', 'payment_link', 'payment_received', 'followup_reminder'];
+    public const EVENTS = ['job_created', 'technician_assigned', 'job_completed', 'payment_link', 'payment_received', 'followup_reminder', 'location_request'];
 
     /** Customer SMS / WhatsApp for a job event (FR-12.2). */
     public function notifyCustomer(ServiceJob $job, string $event, array $vars = []): void

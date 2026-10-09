@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\JobImage;
 use App\Models\JobInventoryUsage;
 use App\Models\JobVisit;
+use App\Models\JobVoiceNote;
 use App\Models\ServiceJob;
 use App\Services\VisitService;
 use App\Support\TenantContext;
@@ -46,7 +47,7 @@ class VisitController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         $visit = $this->ownVisit($request, $id)->load([
-            'images', 'inventoryUsage.item:id,code,name,type,unit_of_measure', 'actionTaken:id,name',
+            'images', 'voiceNotes', 'inventoryUsage.item:id,code,name,type,unit_of_measure', 'actionTaken:id,name',
         ]);
 
         return $this->ok($visit);
@@ -109,6 +110,45 @@ class VisitController extends Controller
         $visit = $this->visits->sign($this->ownVisit($request, $id), $data['signature'], trim($data['signer_name']), $request->user());
 
         return $this->ok($visit, 'Signature saved.');
+    }
+
+    /** Voice note recorded on the phone (m4a / aac / webm / mp3 …). */
+    public function uploadVoice(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'audio' => ['required', 'file', 'max:20480', 'mimetypes:audio/mp4,audio/x-m4a,audio/m4a,audio/aac,audio/mpeg,audio/ogg,audio/webm,audio/wav,audio/x-wav,audio/3gpp,video/mp4,video/3gpp,video/webm'],
+            'duration' => ['nullable', 'integer', 'min:0', 'max:1800'],
+        ], [
+            'audio.mimetypes' => 'That file is not a supported voice recording.',
+            'audio.max' => 'The voice note is too long (over 20 MB).',
+        ]);
+        $visit = $this->ownVisit($request, $id);
+        if ($visit->voiceNotes()->count() >= 20) {
+            abort(422, 'Voice note limit reached for this visit.');
+        }
+        $note = $this->visits->addVoiceNote($visit, $data['audio'], (int) ($data['duration'] ?? 0), $request->user());
+
+        return $this->created($note, 'Voice note saved.');
+    }
+
+    public function deleteVoice(Request $request, int $id, int $noteId): JsonResponse
+    {
+        $visit = $this->ownVisit($request, $id);
+        $this->visits->deleteVoiceNote(JobVoiceNote::where('job_visit_id', $visit->id)->findOrFail($noteId));
+
+        return $this->ok(null, 'Voice note removed.');
+    }
+
+    /** Signed-URL voice note delivery (supports range requests for seeking). */
+    public function voice(int $note): \Symfony\Component\HttpFoundation\BinaryFileResponse
+    {
+        $record = app(TenantContext::class)->withoutScope(fn () => JobVoiceNote::findOrFail($note));
+        abort_unless(Storage::disk('private')->exists($record->file_path), 404);
+
+        return response()->file(Storage::disk('private')->path($record->file_path), [
+            'Content-Type' => $record->mime ?: 'audio/mp4',
+            'Cache-Control' => 'private, max-age=3600',
+        ]);
     }
 
     public function deleteImage(Request $request, int $id, int $imageId): JsonResponse

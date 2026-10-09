@@ -14,7 +14,7 @@ class CashClose extends Model
 
     protected $fillable = [
         'branch_id', 'technician_id', 'close_date', 'opening_balance', 'total_cash_collected', 'total_cheque_collected',
-        'total_digital_collected', 'expected_in_hand', 'amount_confirmed', 'technician_remarks', 'amount_verified',
+        'total_digital_collected', 'total_expenses', 'expected_in_hand', 'amount_confirmed', 'technician_remarks', 'amount_verified',
         'discrepancy_amount', 'discrepancy_remarks', 'total_deposited', 'closing_balance', 'status', 'force_closed',
         'submitted_at', 'submitted_by', 'verified_by', 'verified_at',
     ];
@@ -26,6 +26,7 @@ class CashClose extends Model
             'opening_balance' => 'integer',
             'total_cash_collected' => 'integer',
             'total_cheque_collected' => 'integer',
+            'total_expenses' => 'integer',
             'total_digital_collected' => 'integer',
             'expected_in_hand' => 'integer',
             'amount_confirmed' => 'integer',

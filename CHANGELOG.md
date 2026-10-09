@@ -5,10 +5,14 @@
 ### Added
 - **Customer signature on visits.** `POST /visits/{id}/signature` (PNG + `signer_name`; signing again replaces it). Stored as a `signature` job image; the visit records `signer_name` and `signed_at`. Printed on the invoice PDF. Company setting `jobs.require_signature` blocks completing a visit without one; exposed to apps as `tenant.require_signature`.
 - `POST /auth/device/test` sends a test push to the signed-in user's phones.
+- **Expense claims from the field.** `/my/expenses` (submit, receipt photo, withdraw) and `/expense-claims` (office approve / reject). Approval books a real Expense; claims paid from collected cash are deducted at the technician's daily cash close (`cash_closes.total_expenses`), and rejecting one in a submitted close adds it back.
+- **Voice notes on visits.** `POST/DELETE /visits/{id}/voice-notes` (m4a / aac / mp3 / webm / wav, 20 MB), signed playback URL, shown on the job.
+- **Customer location sharing.** `POST /jobs/{id}/location` (paste a WhatsApp / Google Maps link, short links expanded safely), `POST /jobs/{id}/location-request` (link sent by SMS / WhatsApp, template `location_request`), public `/share-location/{token}`, and `POST /visits/{id}/customer-location` for the technician on site. The assigned technician is notified.
 
 ### Changed
 - **Photo uploads accept full-size camera photos** (up to 25 MB, 12000 px). Large or rotated images are re-encoded server-side to a 2000 px JPEG with EXIF orientation applied (`App\Support\ImageOptimizer`). Docker PHP/nginx upload limits raised to 30 / 32 MB. Signatures don't count towards the 30-photo limit.
 - FCM messages use the app's `default` Android channel with sound; tokens reported `UNREGISTERED` are removed.
+- UPI reference is optional for UPI payments (cheque number and bank UTR are still required).
 - `POST /auth/logout` accepts `device_token` so the phone stops receiving the signed-out user's notifications.
 
 ### Fixed

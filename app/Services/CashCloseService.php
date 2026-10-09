@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\CashClose;
 use App\Models\CashDeposit;
+use App\Models\ExpenseClaim;
 use App\Models\JobVisit;
 use App\Models\Payment;
 use App\Models\Tenant;
@@ -20,7 +21,8 @@ use Illuminate\Validation\ValidationException;
  * close. A close for date D covers every unclosed collection up to the end of D
  * (tenant timezone). Cash and cheques must be handed over; UPI / bank transfers are
  * listed for verification only. Undeposited cash carries forward as cash-in-hand.
- * Credit sales never enter the cash close (FR-15.6).
+ * Credit sales never enter the cash close (FR-15.6). Expense claims the technician
+ * paid from collected cash (not rejected) are deducted from what must be handed over.
  */
 class CashCloseService
 {
@@ -45,6 +47,11 @@ class CashCloseService
         $cheque = (int) $rows->where('method', 'cheque')->sum('amount');
         $digital = (int) $rows->whereIn('method', self::DIGITAL)->sum('amount');
         $opening = $existing?->opening_balance ?? $this->carryForward($technician);
+        $claims = ($existing
+            ? ExpenseClaim::where('cash_close_id', $existing->id)->where('status', '!=', 'rejected')
+            : $this->unclosedClaims($technician, $date))
+            ->with(['category:id,name', 'job:id,crm_call_id'])->orderBy('claim_date')->get();
+        $expenses = $existing ? $existing->total_expenses : (int) $claims->sum('amount');
 
         return [
             'date' => $date,
@@ -55,7 +62,17 @@ class CashCloseService
             'cheque' => $cheque,
             'digital' => $digital,
             'credit' => $this->creditTotal($technician, $tenant, $date),
-            'expected_in_hand' => $opening + $cash + $cheque,
+            'expenses' => $expenses,
+            'expected_in_hand' => $existing ? $existing->expected_in_hand : $opening + $cash + $cheque - $expenses,
+            'expense_claims' => $claims->map(fn (ExpenseClaim $c) => [
+                'id' => $c->id,
+                'claim_date' => $c->claim_date->toDateString(),
+                'amount' => $c->amount,
+                'status' => $c->status,
+                'category' => $c->category?->name,
+                'call_id' => $c->job?->crm_call_id,
+                'description' => $c->description,
+            ])->values(),
             'pending_dates' => $existing ? [] : $this->pendingDatesBefore($technician, $tenant, $date),
             'payments' => $rows->map(fn (Payment $p) => [
                 'id' => $p->id,
@@ -103,8 +120,10 @@ class CashCloseService
             $cash = (int) $payments->where('method', 'cash')->sum('amount');
             $cheque = (int) $payments->where('method', 'cheque')->sum('amount');
             $digital = (int) $payments->whereIn('method', self::DIGITAL)->sum('amount');
+            $claims = $this->unclosedClaims($technician, $date)->lockForUpdate()->get();
+            $expenses = (int) $claims->sum('amount');
             $opening = $this->carryForward($technician);
-            $expected = $opening + $cash + $cheque;
+            $expected = $opening + $cash + $cheque - $expenses;
 
             if ($amountConfirmed !== $expected && blank($remarks)) {
                 throw ValidationException::withMessages(['remarks' => 'Explain the difference between the expected and actual amount.']);
@@ -118,6 +137,7 @@ class CashCloseService
                 'total_cash_collected' => $cash,
                 'total_cheque_collected' => $cheque,
                 'total_digital_collected' => $digital,
+                'total_expenses' => $expenses,
                 'expected_in_hand' => $expected,
                 'amount_confirmed' => $amountConfirmed,
                 'technician_remarks' => $remarks,
@@ -130,6 +150,7 @@ class CashCloseService
 
             // Lock the day's entries (FR-15.2).
             Payment::whereIn('id', $payments->pluck('id'))->update(['cash_close_id' => $close->id]);
+            ExpenseClaim::whereIn('id', $claims->pluck('id'))->update(['cash_close_id' => $close->id]);
 
             // Verified closes with an undeposited balance are now carried into this close.
             CashClose::where('technician_id', $technician->id)->where('id', '!=', $close->id)
@@ -210,6 +231,11 @@ class CashCloseService
         foreach (CashClose::where('technician_id', $technician->id)->where('discrepancy_amount', '!=', 0)->get() as $c) {
             $entries->push(['date' => $c->verified_at, 'type' => 'discrepancy', 'description' => 'Discrepancy on '.$c->close_date->toDateString().': '.$c->discrepancy_remarks, 'amount' => $c->discrepancy_amount]);
         }
+        $claims = ExpenseClaim::where('user_id', $technician->id)->where('paid_from', 'cash_in_hand')
+            ->where('status', '!=', 'rejected')->with('category:id,name')->get();
+        foreach ($claims as $c) {
+            $entries->push(['date' => $c->created_at, 'type' => 'expense', 'description' => 'Expense · '.$c->category?->name.($c->status === 'pending' ? ' (pending approval)' : ''), 'amount' => -$c->amount]);
+        }
         foreach (CashDeposit::where('technician_id', $technician->id)->get() as $d) {
             $entries->push(['date' => $d->created_at, 'type' => 'deposit', 'description' => 'Deposited to '.$d->deposited_to.($d->reference_no ? ' · '.$d->reference_no : ''), 'amount' => -$d->amount]);
         }
@@ -227,8 +253,9 @@ class CashCloseService
     public function cashInHand(User $technician): int
     {
         $unclosed = (int) $this->unclosedPayments($technician, now()->addDay())->whereIn('method', self::IN_HAND)->sum('amount');
+        $spent = (int) $this->unclosedClaims($technician, null)->sum('amount');
 
-        return $this->carryForward($technician) + $unclosed;
+        return $this->carryForward($technician) + $unclosed - $spent;
     }
 
     private function recalculate(CashClose $close): void
@@ -241,15 +268,27 @@ class CashCloseService
         $close->save();
     }
 
-    /** Cash still with the technician from previous closes (collections + discrepancies − deposits). */
+    /** Cash still with the technician from previous closes (collections + discrepancies − expenses − deposits). */
     private function carryForward(User $technician): int
     {
         $closes = CashClose::where('technician_id', $technician->id);
         $collected = (int) (clone $closes)->sum(DB::raw('total_cash_collected + total_cheque_collected'));
         $discrepancy = (int) (clone $closes)->sum('discrepancy_amount');
+        $expenses = (int) (clone $closes)->sum('total_expenses');
         $deposited = (int) CashDeposit::where('technician_id', $technician->id)->sum('amount');
 
-        return $collected + $discrepancy - $deposited;
+        return $collected + $discrepancy - $expenses - $deposited;
+    }
+
+    /** Expense claims paid from cash in hand, not rejected and not yet in a close (up to $date if given). */
+    private function unclosedClaims(User $technician, ?string $date): Builder
+    {
+        return ExpenseClaim::query()
+            ->where('user_id', $technician->id)
+            ->where('paid_from', 'cash_in_hand')
+            ->where('status', '!=', 'rejected')
+            ->whereNull('cash_close_id')
+            ->when($date, fn ($q) => $q->whereDate('claim_date', '<=', $date));
     }
 
     private function unclosedPayments(User $technician, CarbonImmutable|\DateTimeInterface $until): Builder

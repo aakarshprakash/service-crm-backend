@@ -8,6 +8,7 @@ use App\Models\ActionTakenOption;
 use App\Models\InventoryItem;
 use App\Models\JobImage;
 use App\Models\JobInventoryUsage;
+use App\Models\JobVoiceNote;
 use App\Models\JobVisit;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
@@ -173,6 +174,40 @@ class VisitService
         }
 
         return $visit->fresh('images');
+    }
+
+    public function addVoiceNote(JobVisit $visit, UploadedFile $file, int $duration, User $user): JobVoiceNote
+    {
+        $this->ensureOpen($visit);
+        $ext = match ($file->getMimeType()) {
+            'audio/mpeg' => 'mp3',
+            'audio/ogg' => 'ogg',
+            'audio/webm', 'video/webm' => 'webm',
+            'audio/wav', 'audio/x-wav' => 'wav',
+            'audio/3gpp', 'video/3gpp' => '3gp',
+            'audio/aac' => 'aac',
+            default => 'm4a',
+        };
+        $path = $file->storeAs("tenants/{$visit->tenant_id}/jobs/{$visit->job_id}/voice", Str::uuid().'.'.$ext, 'private');
+        // m4a / 3gp / webm recordings are often detected as video/*; they're audio-only.
+        $mime = preg_replace('#^video/#', 'audio/', (string) $file->getMimeType());
+
+        return JobVoiceNote::create([
+            'job_id' => $visit->job_id,
+            'job_visit_id' => $visit->id,
+            'file_path' => $path,
+            'mime' => $mime,
+            'duration_seconds' => max(0, min($duration, 1800)),
+            'size' => $file->getSize(),
+            'uploaded_by' => $user->id,
+        ]);
+    }
+
+    public function deleteVoiceNote(JobVoiceNote $note): void
+    {
+        $this->ensureOpen($note->visit);
+        Storage::disk('private')->delete($note->file_path);
+        $note->delete();
     }
 
     public function deleteImage(JobImage $image): void

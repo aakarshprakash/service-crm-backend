@@ -71,6 +71,7 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('public', fn (Request $request) => Limit::perMinute(30)->by($request->ip()));
+        RateLimiter::for('device', fn (Request $request) => Limit::perMinute(10)->by('device:'.($request->user()?->id ?: $request->ip())));
         RateLimiter::for('uploads', fn (Request $request) => Limit::perMinute(40)->by($request->user()?->id ?: $request->ip()));
         RateLimiter::for('exports', fn (Request $request) => Limit::perMinute(10)->by($request->user()?->id ?: $request->ip()));
     }

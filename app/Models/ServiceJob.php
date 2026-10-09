@@ -27,6 +27,9 @@ class ServiceJob extends Model
 
     protected $appends = ['call_age_days'];
 
+    /** The customer's share-location link is handed out by the office, never in job payloads. */
+    protected $hidden = ['location_token'];
+
     protected function casts(): array
     {
         return [
@@ -135,6 +138,11 @@ class ServiceJob extends Model
     public function images(): HasMany
     {
         return $this->hasMany(JobImage::class, 'job_id');
+    }
+
+    public function voiceNotes(): HasMany
+    {
+        return $this->hasMany(JobVoiceNote::class, 'job_id');
     }
 
     public function statusHistory(): HasMany

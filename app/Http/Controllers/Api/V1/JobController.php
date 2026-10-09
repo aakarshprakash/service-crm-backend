@@ -99,7 +99,7 @@ class JobController extends Controller
             'technician:id,name,phone', 'creator:id,name',
             'visits.technician:id,name', 'visits.actionTaken:id,name', 'visits.assistedStaff:id,name',
             'visits.inventoryUsage.item:id,code,name,type,unit_of_measure',
-            'images', 'statusHistory.user:id,name',
+            'images', 'voiceNotes.uploader:id,name', 'statusHistory.user:id,name',
             'invoice.payments.collector:id,name', 'review', 'parent:id,crm_call_id,status', 'followUps:id,parent_job_id,crm_call_id,status,scheduled_at',
         ])->findOrFail($id);
 

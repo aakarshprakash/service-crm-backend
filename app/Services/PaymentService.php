@@ -32,8 +32,9 @@ class PaymentService
         if ($amount <= 0) {
             throw ValidationException::withMessages(['amount' => 'Amount must be greater than zero.']);
         }
-        if (in_array($method, ['cheque', 'upi', 'bank_transfer'], true) && empty($meta['reference_no'])) {
-            $label = ['cheque' => 'Cheque number', 'upi' => 'UPI transaction reference', 'bank_transfer' => 'Bank reference / UTR'][$method];
+        // UPI reference is optional: the customer's app shows it, but technicians can't always note it down.
+        if (in_array($method, ['cheque', 'bank_transfer'], true) && empty($meta['reference_no'])) {
+            $label = ['cheque' => 'Cheque number', 'bank_transfer' => 'Bank reference / UTR'][$method];
             throw ValidationException::withMessages(['reference_no' => "$label is required."]);
         }
 

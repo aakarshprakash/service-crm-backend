@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
+use App\Http\Controllers\Api\V1\ExpenseClaimController;
 use App\Http\Controllers\Api\V1\ExpenseController;
 use App\Http\Controllers\Api\V1\HrController;
 use App\Http\Controllers\Api\V1\AuthController;
@@ -12,6 +13,7 @@ use App\Http\Controllers\Api\V1\DashboardController;
 use App\Http\Controllers\Api\V1\InventoryController;
 use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\JobController;
+use App\Http\Controllers\Api\V1\JobLocationController;
 use App\Http\Controllers\Api\V1\MasterDataController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\Portal\PortalController;
@@ -41,12 +43,17 @@ Route::prefix('v1')->group(function () {
         Route::get('pay/{token}/pdf', [PublicPaymentController::class, 'pdf']);
         Route::post('pay/{token}/order', [PublicPaymentController::class, 'createOrder']);
         Route::post('pay/{token}/confirm', [PublicPaymentController::class, 'confirm']);
+        // Customer shares their location for a job (link sent by SMS / WhatsApp).
+        Route::get('share-location/{token}', [JobLocationController::class, 'publicShow']);
+        Route::post('share-location/{token}', [JobLocationController::class, 'publicStore'])->middleware('throttle:10,1');
     });
 
     Route::post('payments/webhook/{driver}/{tenant?}', [PublicPaymentController::class, 'webhook'])
         ->middleware('throttle:120,1')->where(['driver' => '[a-z]+', 'tenant' => '[a-z0-9-]+']);
 
     Route::get('files/images/{image}', [VisitController::class, 'image'])->name('files.image')->middleware('signed');
+    Route::get('files/voice/{note}', [VisitController::class, 'voice'])->name('files.voice')->middleware('signed');
+    Route::get('files/receipts/{claim}', [ExpenseClaimController::class, 'receiptFile'])->name('files.receipt')->middleware('signed');
 
     Route::prefix('auth')->group(function () {
         Route::middleware('throttle:login')->group(function () {
@@ -73,7 +80,9 @@ Route::prefix('v1')->group(function () {
             Route::post('two-factor', [AuthController::class, 'twoFactorSetup']);
             Route::post('two-factor/confirm', [AuthController::class, 'twoFactorConfirm'])->middleware('throttle:login');
             Route::delete('two-factor', [AuthController::class, 'twoFactorDisable']);
-            Route::post('device', [AuthController::class, 'registerDevice']);
+            // Own limit, outside the shared per-user API budget: technician app builds before
+            // 2.1.2 re-register the push token in a loop, which must not lock the user out.
+            Route::post('device', [AuthController::class, 'registerDevice'])->withoutMiddleware('throttle:api')->middleware('throttle:device');
             Route::post('device/test', [AuthController::class, 'testPush'])->middleware('throttle:5,1');
         });
         Route::post('impersonation/stop', [PlatformController::class, 'stopImpersonating']);
@@ -153,6 +162,8 @@ Route::prefix('v1')->group(function () {
             Route::patch('jobs/{id}/reschedule', [JobController::class, 'reschedule'])->whereNumber('id');
             Route::post('jobs/{id}/cancel', [JobController::class, 'cancel'])->whereNumber('id');
             Route::post('jobs/{id}/follow-up', [JobController::class, 'followUp'])->whereNumber('id');
+            Route::post('jobs/{id}/location', [JobLocationController::class, 'set'])->whereNumber('id')->middleware('throttle:30,1');
+            Route::post('jobs/{id}/location-request', [JobLocationController::class, 'requestLink'])->whereNumber('id');
         });
 
         // Service execution (§5.6) – technician only
@@ -163,6 +174,9 @@ Route::prefix('v1')->group(function () {
             Route::patch('visits/{id}', [VisitController::class, 'update'])->whereNumber('id');
             Route::post('visits/{id}/images', [VisitController::class, 'uploadImage'])->whereNumber('id')->middleware('throttle:uploads');
             Route::post('visits/{id}/signature', [VisitController::class, 'sign'])->whereNumber('id')->middleware('throttle:uploads');
+            Route::post('visits/{id}/voice-notes', [VisitController::class, 'uploadVoice'])->whereNumber('id')->middleware('throttle:uploads');
+            Route::delete('visits/{id}/voice-notes/{noteId}', [VisitController::class, 'deleteVoice'])->whereNumber(['id', 'noteId']);
+            Route::post('visits/{id}/customer-location', [JobLocationController::class, 'fromSite'])->whereNumber('id');
             Route::delete('visits/{id}/images/{imageId}', [VisitController::class, 'deleteImage'])->whereNumber(['id', 'imageId']);
             Route::post('visits/{id}/spares', [VisitController::class, 'addSpare'])->whereNumber('id');
             Route::delete('visits/{id}/spares/{usageId}', [VisitController::class, 'removeSpare'])->whereNumber(['id', 'usageId']);
@@ -177,6 +191,9 @@ Route::prefix('v1')->group(function () {
             Route::post('expenses', [ExpenseController::class, 'store']);
             Route::patch('expenses/{id}', [ExpenseController::class, 'update'])->whereNumber('id');
             Route::delete('expenses/{id}', [ExpenseController::class, 'destroy'])->whereNumber('id');
+            Route::get('expense-claims', [ExpenseClaimController::class, 'index']);
+            Route::post('expense-claims/{id}/approve', [ExpenseClaimController::class, 'approve'])->whereNumber('id');
+            Route::post('expense-claims/{id}/reject', [ExpenseClaimController::class, 'reject'])->whereNumber('id');
         });
         Route::middleware('can:accounts.view')->group(function () {
             Route::get('books/summary', [BooksController::class, 'summary']);
@@ -201,6 +218,11 @@ Route::prefix('v1')->group(function () {
             Route::post('leaves/{id}/cancel', [HrController::class, 'cancelLeave'])->whereNumber('id');
             Route::get('payslips', [HrController::class, 'myPayslips']);
             Route::get('payslips/{id}/pdf', [HrController::class, 'myPayslipPdf'])->whereNumber('id');
+            // Field expense claims.
+            Route::get('expenses', [ExpenseClaimController::class, 'mine']);
+            Route::post('expenses', [ExpenseClaimController::class, 'store']);
+            Route::post('expenses/{id}/receipt', [ExpenseClaimController::class, 'receipt'])->whereNumber('id')->middleware('throttle:uploads');
+            Route::delete('expenses/{id}', [ExpenseClaimController::class, 'destroy'])->whereNumber('id');
         });
         // …and management.
         Route::prefix('hr')->group(function () {

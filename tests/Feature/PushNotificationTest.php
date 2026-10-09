@@ -32,6 +32,22 @@ class PushNotificationTest extends TestCase
         $this->assertFalse(DeviceToken::where('token', 'fcm-token-1')->exists());
     }
 
+    /** Old app builds re-register in a loop; that must only hit its own limit, never the rest of the API. */
+    public function test_device_registration_flood_does_not_block_other_requests(): void
+    {
+        ['tenant' => $tenant] = $this->makeTenant();
+        $tech = $this->makeUser($tenant, Role::Technician);
+        $auth = ['Authorization' => 'Bearer '.$tech->createToken('phone')->plainTextToken];
+
+        for ($i = 0; $i < 10; $i++) {
+            $this->postJson('/api/v1/auth/device', ['token' => 'loop-token', 'platform' => 'android'], $auth)->assertOk();
+        }
+        $this->postJson('/api/v1/auth/device', ['token' => 'loop-token', 'platform' => 'android'], $auth)->assertStatus(429);
+        // Everything else still works.
+        $this->getJson('/api/v1/auth/me', $auth)->assertOk()->assertHeader('X-RateLimit-Remaining', '179');
+        $this->assertSame(1, DeviceToken::where('token', 'loop-token')->count());
+    }
+
     public function test_fcm_payload_uses_app_channel_and_flags_dead_tokens(): void
     {
         $options = ['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA];

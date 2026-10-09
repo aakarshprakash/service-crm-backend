@@ -35,14 +35,14 @@ class WalkInBillController extends Controller
             'notes' => ['nullable', 'string', 'max:500'],
             'payment_method' => ['nullable', Rule::in(['cash', 'upi', 'cheque', 'bank_transfer', 'credit'])],
             'amount_paid' => ['nullable', 'integer', 'min:0', 'max:100000000'],
-            'reference_no' => ['nullable', 'string', 'max:100', Rule::requiredIf(fn () => in_array($request->input('payment_method'), ['upi', 'cheque', 'bank_transfer'], true) && (int) $request->input('amount_paid') > 0)],
+            'reference_no' => ['nullable', 'string', 'max:100', Rule::requiredIf(fn () => in_array($request->input('payment_method'), ['cheque', 'bank_transfer'], true) && (int) $request->input('amount_paid') > 0)],
         ], [
             'customer.name.required_without' => 'Enter the customer’s name, or pick an existing customer.',
             'customer.phone.required_without' => 'Enter the customer’s phone number, or pick an existing customer.',
             'items.required' => 'Add at least one service or part.',
             'items.*.item_id.required_if' => 'Choose the part.',
             'items.*.unit_price.required_if' => 'Enter the service charge.',
-            'reference_no.required' => 'Enter the UPI / cheque / bank reference.',
+            'reference_no.required' => 'Enter the cheque number or bank reference.',
         ]);
 
         $invoice = $this->bills->create($data, $request->user());

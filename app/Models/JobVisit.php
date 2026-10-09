@@ -71,6 +71,11 @@ class JobVisit extends Model
         return $this->hasMany(JobInventoryUsage::class, 'job_visit_id');
     }
 
+    public function voiceNotes(): HasMany
+    {
+        return $this->hasMany(JobVoiceNote::class, 'job_visit_id');
+    }
+
     public function payments(): HasMany
     {
         return $this->hasMany(Payment::class, 'job_visit_id');
