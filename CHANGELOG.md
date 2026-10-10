@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Added
+- **Servon Manager app add-on.** New plan feature `manager_app`. `POST /auth/token` takes `app: "manager"`: only admins, coordinators and accountants of a company whose plan has the feature can sign in (technicians are pointed to their app). Manager tokens carry the `app:manager` ability and are revoked with a 401 (`code: manager_app_unavailable`) once the plan loses the feature. The profile exposes `tenant.manager_app`; `/version` returns `min_manager_version`.
+- Office push notifications: a customer raising a request on the portal (`new_complaint`, admin + coordinator), a technician submitting a cash close (`cash_close_submitted`, admin + accountant, with any shortfall), and a 9:30 am `jobs_attention` summary of overdue and unassigned jobs (admin + coordinator, scheduler).
+- `GET /jobs?overdue=1` (open / pending with a visit date before today, the dashboard's "overdue" rule).
 - **Customer signature on visits.** `POST /visits/{id}/signature` (PNG + `signer_name`; signing again replaces it). Stored as a `signature` job image; the visit records `signer_name` and `signed_at`. Printed on the invoice PDF. Company setting `jobs.require_signature` blocks completing a visit without one; exposed to apps as `tenant.require_signature`.
 - `POST /auth/device/test` sends a test push to the signed-in user's phones.
 - **Expense claims from the field.** `/my/expenses` (submit, receipt photo, withdraw) and `/expense-claims` (office approve / reject). Approval books a real Expense; claims paid from collected cash are deducted at the technician's daily cash close (`cash_closes.total_expenses`), and rejecting one in a submitted close adds it back.
@@ -10,6 +13,7 @@
 - **Customer location sharing.** `POST /jobs/{id}/location` (paste a WhatsApp / Google Maps link, short links expanded safely), `POST /jobs/{id}/location-request` (link sent by SMS / WhatsApp, template `location_request`), public `/share-location/{token}`, and `POST /visits/{id}/customer-location` for the technician on site. The assigned technician is notified.
 
 ### Changed
+- `GET /expense-claims?status=` accepts several statuses (`approved,rejected`).
 - **Photo uploads accept full-size camera photos** (up to 25 MB, 12000 px). Large or rotated images are re-encoded server-side to a 2000 px JPEG with EXIF orientation applied (`App\Support\ImageOptimizer`). Docker PHP/nginx upload limits raised to 30 / 32 MB. Signatures don't count towards the 30-photo limit.
 - FCM messages use the app's `default` Android channel with sound; tokens reported `UNREGISTERED` are removed.
 - UPI reference is optional for UPI payments (cheque number and bank UTR are still required).

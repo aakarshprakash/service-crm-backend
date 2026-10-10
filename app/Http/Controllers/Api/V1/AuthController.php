@@ -94,7 +94,10 @@ class AuthController extends Controller
             'password' => ['required', 'string', 'max:200'],
             'device_name' => ['required', 'string', 'max:100'],
             'company' => ['nullable', 'string', 'max:40'],
+            // Which phone app is signing in; older technician builds don't send it.
+            'app' => ['nullable', Rule::in(['technician', 'manager'])],
         ]);
+        $manager = ($data['app'] ?? null) === 'manager';
 
         $login = strtolower(trim($data['login']));
         if (! str_contains($login, '@')) {
@@ -117,9 +120,16 @@ class AuthController extends Controller
         if ($user->hasTwoFactor()) {
             throw ValidationException::withMessages(['login' => 'Accounts with two-factor authentication must sign in on the web.']);
         }
+        if ($manager && $user->role === Role::Technician) {
+            throw ValidationException::withMessages(['login' => 'Technicians sign in with the Servon Technician app.']);
+        }
+        if ($manager && ! $user->tenant?->feature('manager_app')) {
+            throw ValidationException::withMessages(['login' => 'The Servon Manager app is not included in your company’s plan. Contact Servon support to add it.']);
+        }
 
         $user->forceFill(['last_login_at' => now()])->saveQuietly();
-        $token = $user->createToken(mb_substr($data['device_name'], 0, 100), ['*'], now()->addDays(30));
+        // Manager app tokens are marked so they stop working if the plan loses the add-on (ResolveTenant).
+        $token = $user->createToken(mb_substr($data['device_name'], 0, 100), $manager ? ['*', 'app:manager'] : ['*'], now()->addDays(30));
         Audit::log('auth.token', $user, ['device' => $data['device_name']], $user->tenant_id);
 
         return $this->ok(['token' => $token->plainTextToken, 'expires_at' => $token->accessToken->expires_at, 'user' => $this->profile($user)]);
@@ -450,6 +460,7 @@ class AuthController extends Controller
                 'portal_enabled' => $tenant->portalEnabled(),
                 'tutorial_mode' => (bool) $tenant->setting('tutorial_mode'),
                 'require_signature' => (bool) $tenant->setting('jobs.require_signature', false),
+                'manager_app' => $tenant->feature('manager_app'),
             ] : null,
         ];
     }

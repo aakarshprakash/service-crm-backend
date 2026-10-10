@@ -33,6 +33,22 @@ Schedule::call(function (NotificationService $notifications, TenantContext $cont
     });
 })->name('visit-reminders')->dailyAt('08:00')->timezone('Asia/Kolkata')->withoutOverlapping();
 
+// Morning heads-up for the people who dispatch: visits that slipped past their date and jobs nobody has.
+Schedule::call(function (NotificationService $notifications, TenantContext $context) {
+    Tenant::whereIn('status', ['trial', 'active'])->each(function (Tenant $tenant) use ($notifications, $context) {
+        $context->runAs($tenant->id, function () use ($tenant, $notifications) {
+            $todayStart = now($tenant->timezone)->startOfDay()->utc();
+            $overdue = ServiceJob::whereIn('status', ['open', 'pending'])->where('scheduled_at', '<', $todayStart)->count();
+            $unassigned = ServiceJob::whereIn('status', ['open', 'pending'])->whereNull('assigned_technician_id')->count();
+            if (! $overdue && ! $unassigned) {
+                return;
+            }
+            $parts = array_filter([$overdue ? "{$overdue} overdue" : null, $unassigned ? "{$unassigned} unassigned" : null]);
+            $notifications->notifyRoles(['admin', 'coordinator'], 'jobs_attention', 'Jobs needing attention', 'Today: '.implode(', ', $parts).' job(s).', ['screen' => 'jobs']);
+        });
+    });
+})->name('jobs-attention')->dailyAt('09:30')->timezone('Asia/Kolkata')->withoutOverlapping();
+
 // Housekeeping.
 Schedule::call(fn () => OtpCode::where('expires_at', '<', now()->subDay())->delete())->name('prune-otps')->daily();
 Schedule::command('sanctum:prune-expired --hours=24')->daily();

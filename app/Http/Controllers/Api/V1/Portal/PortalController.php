@@ -11,6 +11,7 @@ use App\Models\Review;
 use App\Models\ServiceJob;
 use App\Services\InvoiceService;
 use App\Services\JobService;
+use App\Services\NotificationService;
 use App\Services\PaymentService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -99,6 +100,9 @@ class PortalController extends Controller
             'priority' => 'medium',
             'call_type' => 'portal',
         ], null);
+        // Nobody at the office logged this one: tell the people who dispatch jobs.
+        app(NotificationService::class)->notifyRoles(['admin', 'coordinator'], 'new_complaint', 'New service request',
+            "{$job->customer?->name} raised {$job->crm_call_id} from the customer portal.", ['job_id' => $job->id]);
 
         return $this->created($this->publicJob($job->load('complaintType:id,name')), "Request {$job->crm_call_id} registered. We will contact you shortly.");
     }

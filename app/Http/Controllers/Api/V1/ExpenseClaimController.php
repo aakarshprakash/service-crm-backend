@@ -94,7 +94,7 @@ class ExpenseClaimController extends Controller
     public function index(Request $request): JsonResponse
     {
         $rows = ExpenseClaim::query()
-            ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
+            ->when($request->filled('status'), fn ($q) => $q->whereIn('status', explode(',', $request->string('status'))))
             ->when($request->filled('user_id'), fn ($q) => $q->where('user_id', $request->integer('user_id')))
             ->with(['user:id,name,role', 'category:id,name', 'job:id,crm_call_id', 'decider:id,name', 'cashClose:id,close_date,status'])
             ->orderByRaw("status = 'pending' desc")->orderByDesc('claim_date')->orderByDesc('id')

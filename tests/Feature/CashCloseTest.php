@@ -78,6 +78,10 @@ class CashCloseTest extends TestCase
             ->assertCreated()->assertJsonPath('data.expected_in_hand', 100000);
         $this->postJson('/api/v1/accounts/cash-close', ['date' => $this->today(), 'amount_confirmed' => 100000])
             ->assertStatus(422);
+        // The accountant is asked to verify it, with the shortfall in the message.
+        $note = \App\Models\NotificationLog::where('user_id', $this->accountant->id)->where('type', 'cash_close_submitted')->first();
+        $this->assertNotNull($note);
+        $this->assertStringContainsString('expected', $note->message);
 
         $this->assertDatabaseMissing('payments', ['collected_by' => $this->tech->id, 'cash_close_id' => null]);
     }

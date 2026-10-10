@@ -66,6 +66,8 @@ class PortalAndReportsTest extends TestCase
 
         $this->withHeaders($this->spa)->postJson('/api/v1/customer/complaints', ['complaint_details' => 'AC is making noise since morning'])
             ->assertCreated()->assertJsonPath('data.status', 'open');
+        // The office is told about a request it didn't log itself.
+        $this->assertTrue(\App\Models\NotificationLog::where('tenant_id', $tenant->id)->where('type', 'new_complaint')->where('channel', 'in_app')->exists());
 
         $this->withHeaders($this->spa)->postJson("/api/v1/customer/jobs/{$mine->id}/review", ['rating' => 6])->assertStatus(422);
         $this->withHeaders($this->spa)->postJson("/api/v1/customer/jobs/{$mine->id}/review", ['rating' => 5, 'comment' => 'Great'])->assertCreated();

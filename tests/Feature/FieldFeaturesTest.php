@@ -84,6 +84,8 @@ class FieldFeaturesTest extends TestCase
         $this->actingAsUser($admin);
         $this->getJson('/api/v1/expense-claims')->assertOk()->assertJsonPath('meta.pending_count', 1);
         $this->postJson("/api/v1/expense-claims/{$claimId}/approve")->assertOk()->assertJsonPath('data.status', 'approved');
+        // The manager app's "Decided" list asks for several statuses at once.
+        $this->getJson('/api/v1/expense-claims?status=approved,rejected')->assertOk()->assertJsonCount(1, 'data');
         $expense = $this->inTenant($tenant, fn () => Expense::firstOrFail());
         $this->assertSame([20000, 'cash', $tech->id], [$expense->amount, $expense->payment_method, $expense->user_id]);
         $this->assertTrue(NotificationLog::where('user_id', $tech->id)->where('type', 'expense_claim_decided')->exists());

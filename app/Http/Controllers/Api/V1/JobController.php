@@ -201,6 +201,8 @@ class JobController extends Controller
             ->when($request->filled('from'), fn ($q) => $q->where('created_at', '>=', $request->date('from', null, $tz)->startOfDay()->utc()))
             ->when($request->filled('to'), fn ($q) => $q->where('created_at', '<=', $request->date('to', null, $tz)->endOfDay()->utc()))
             ->when($request->boolean('today'), fn ($q) => $q->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()]))
+            // Same rule as the dashboard's "overdue" count: still open, visit date before today.
+            ->when($request->boolean('overdue'), fn ($q) => $q->whereIn('status', ['open', 'pending'])->where('scheduled_at', '<', now($tz)->startOfDay()->utc()))
             ->search($request->string('search')->toString());
     }
 

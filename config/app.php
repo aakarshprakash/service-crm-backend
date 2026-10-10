@@ -19,6 +19,8 @@ return [
     'version' => '2.1.0',
     // Oldest mobile app version the API still supports; older apps are asked to update.
     'min_mobile_version' => '2.1.0',
+    // Same for the Servon Manager app (office staff).
+    'min_manager_version' => '1.0.0',
 
     /*
     |--------------------------------------------------------------------------

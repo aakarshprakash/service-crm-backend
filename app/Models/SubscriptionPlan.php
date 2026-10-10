@@ -12,7 +12,8 @@ class SubscriptionPlan extends Model
 
     protected $fillable = ['name', 'code', 'price', 'billing_cycle', 'max_users', 'max_technicians', 'features', 'is_active'];
 
-    public const FEATURES = ['customer_portal', 'sms', 'whatsapp', 'online_payments', 'advanced_reports'];
+    /** manager_app: office staff may use the Servon Manager phone app (an add-on). */
+    public const FEATURES = ['customer_portal', 'sms', 'whatsapp', 'online_payments', 'advanced_reports', 'manager_app'];
 
     public function tenants(): HasMany
     {

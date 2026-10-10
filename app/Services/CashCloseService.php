@@ -9,6 +9,7 @@ use App\Models\JobVisit;
 use App\Models\Payment;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Money;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -155,6 +156,13 @@ class CashCloseService
             // Verified closes with an undeposited balance are now carried into this close.
             CashClose::where('technician_id', $technician->id)->where('id', '!=', $close->id)
                 ->where('status', 'verified')->update(['status' => 'closed']);
+
+            if (! $force) {
+                $declared = Money::format($amountConfirmed, $tenant->currency ?? 'INR');
+                $mismatch = $amountConfirmed !== $expected ? ' (expected '.Money::format($expected, $tenant->currency ?? 'INR').')' : '';
+                DB::afterCommit(fn () => app(NotificationService::class)->notifyRoles(['admin', 'accountant'], 'cash_close_submitted', 'Cash close to verify',
+                    "{$technician->name} submitted {$declared} for ".CarbonImmutable::parse($date)->format('d M').$mismatch.'.', ['cash_close_id' => $close->id]));
+            }
 
             return $close;
         });

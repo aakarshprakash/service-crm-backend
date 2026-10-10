@@ -46,6 +46,14 @@ class ResolveTenant
             return response()->json(['message' => $message, 'code' => 'tenant_unavailable'], 403);
         }
 
+        // Servon Manager is a plan add-on: its sessions end when the company's plan no longer has it.
+        $token = $user->currentAccessToken();
+        if ($token instanceof PersonalAccessToken && in_array('app:manager', $token->abilities ?? [], true) && ! $tenant->feature('manager_app')) {
+            $token->delete();
+
+            return response()->json(['message' => 'The Servon Manager app is no longer included in your company’s plan.', 'code' => 'manager_app_unavailable'], 401);
+        }
+
         $this->context->set($tenant->id);
 
         return $next($request);

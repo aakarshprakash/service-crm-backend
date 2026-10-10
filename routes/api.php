@@ -36,7 +36,7 @@ Route::prefix('v1')->group(function () {
     Route::middleware('throttle:public')->group(function () {
         Route::get('plans', [AuthController::class, 'plans']);
         Route::get('version', fn () => response()->json(['data' => [
-            'version' => config('app.version'), 'min_mobile_version' => config('app.min_mobile_version'),
+            'version' => config('app.version'), 'min_mobile_version' => config('app.min_mobile_version'), 'min_manager_version' => config('app.min_manager_version'),
         ]]));
         Route::get('portal/company/{slug}', [AuthController::class, 'portalCompany'])->where('slug', '[a-z0-9-]+');
         Route::get('pay/{token}', [PublicPaymentController::class, 'show']);
