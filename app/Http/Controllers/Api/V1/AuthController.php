@@ -360,9 +360,12 @@ class AuthController extends Controller
             'platform' => ['nullable', Rule::in(['android', 'ios', 'web'])],
         ]);
         DeviceToken::where('token', $data['token'])->where('user_id', '!=', $request->user()->id)->delete();
+        // The token's app decides which Firebase project's key sends to it (manager may use its own).
+        $session = $request->user()->currentAccessToken();
+        $app = $session instanceof PersonalAccessToken && in_array('app:manager', $session->abilities ?? [], true) ? 'manager' : 'technician';
         DeviceToken::updateOrCreate(
             ['user_id' => $request->user()->id, 'token' => $data['token']],
-            ['platform' => $data['platform'] ?? 'android']
+            ['platform' => $data['platform'] ?? 'android', 'app' => $app]
         );
 
         return $this->ok(null, 'Device registered.');

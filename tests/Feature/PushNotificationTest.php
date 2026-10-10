@@ -48,7 +48,8 @@ class PushNotificationTest extends TestCase
         $this->assertSame(1, DeviceToken::where('token', 'loop-token')->count());
     }
 
-    public function test_fcm_payload_uses_app_channel_and_flags_dead_tokens(): void
+    /** A throwaway service-account key file for a Firebase project (skips the test without OpenSSL). */
+    private function serviceAccount(string $project): string
     {
         $options = ['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA];
         // Windows PHP builds need an explicit openssl.cnf to generate keys.
@@ -61,8 +62,55 @@ class PushNotificationTest extends TestCase
             $this->markTestSkipped('OpenSSL key generation is not available in this PHP build.');
         }
         $path = tempnam(sys_get_temp_dir(), 'fcm');
-        file_put_contents($path, json_encode(['project_id' => 'servon-test', 'client_email' => 'svc@servon-test.iam.gserviceaccount.com', 'private_key' => $pem]));
-        Cache::forget('fcm_access_token');
+        file_put_contents($path, json_encode(['project_id' => $project, 'client_email' => "svc@{$project}.iam.gserviceaccount.com", 'private_key' => $pem]));
+
+        return $path;
+    }
+
+    public function test_device_tokens_remember_which_app_registered_them(): void
+    {
+        ['tenant' => $tenant] = $this->makeTenant('acme', ['manager_app' => true]);
+        $tech = $this->makeUser($tenant, Role::Technician);
+        $techAuth = ['Authorization' => 'Bearer '.$tech->createToken('phone')->plainTextToken];
+        $this->postJson('/api/v1/auth/device', ['token' => 'tech-phone'], $techAuth)->assertOk();
+
+        $this->forgetGuards();
+        $login = $this->postJson('/api/v1/auth/token', ['login' => 'admin@acme.test', 'password' => self::PASSWORD, 'device_name' => 'Phone', 'app' => 'manager'])->assertOk();
+        $this->forgetGuards();
+        $this->postJson('/api/v1/auth/device', ['token' => 'manager-phone'], ['Authorization' => 'Bearer '.$login->json('data.token')])->assertOk();
+
+        $this->assertSame('technician', DeviceToken::where('token', 'tech-phone')->value('app'));
+        $this->assertSame('manager', DeviceToken::where('token', 'manager-phone')->value('app'));
+    }
+
+    public function test_manager_tokens_are_sent_through_the_manager_firebase_project(): void
+    {
+        $main = $this->serviceAccount('servon-main');
+        $manager = $this->serviceAccount('servon-manager');
+        Cache::flush();
+        Http::fake([
+            'oauth2.googleapis.com/*' => Http::response(['access_token' => 'ya29.test']),
+            'fcm.googleapis.com/*' => Http::response(['name' => 'projects/x/messages/1']),
+        ]);
+
+        (new FcmProvider(['credentials' => $main, 'manager_credentials' => $manager]))->send('tok', 'Hi', ['app' => 'manager']);
+        (new FcmProvider(['credentials' => $main, 'manager_credentials' => $manager]))->send('tok', 'Hi', ['app' => 'technician']);
+        // No separate manager key uploaded: the main project is used.
+        (new FcmProvider(['credentials' => $main, 'manager_credentials' => '/missing/fcm-manager.json']))->send('tok', 'Hi', ['app' => 'manager']);
+
+        $projects = collect(Http::recorded())->map(fn ($pair) => $pair[0]->url())->filter(fn ($u) => str_contains($u, 'fcm.googleapis.com'))
+            ->map(fn ($u) => explode('/', $u)[5])->values()->all();
+        $this->assertSame(['servon-manager', 'servon-main', 'servon-main'], $projects);
+        // Each service account signs in for itself.
+        $this->assertCount(2, collect(Http::recorded())->filter(fn ($pair) => str_contains($pair[0]->url(), 'oauth2')));
+        @unlink($main);
+        @unlink($manager);
+    }
+
+    public function test_fcm_payload_uses_app_channel_and_flags_dead_tokens(): void
+    {
+        $path = $this->serviceAccount('servon-test');
+        Cache::flush();
 
         Http::fake([
             'oauth2.googleapis.com/*' => Http::response(['access_token' => 'ya29.test']),

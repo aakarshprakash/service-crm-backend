@@ -12,9 +12,7 @@ class FcmProvider implements MessagingProviderInterface
 
     public function send(string $to, string $message, array $meta = []): array
     {
-        $credentials = is_readable((string) $this->config['credentials'])
-            ? json_decode((string) file_get_contents($this->config['credentials']), true)
-            : null;
+        $credentials = $this->credentials($meta['app'] ?? null);
         if (! $credentials) {
             return ['ok' => false, 'error' => 'FCM credentials file missing or invalid'];
         }
@@ -44,9 +42,29 @@ class FcmProvider implements MessagingProviderInterface
         ];
     }
 
+    /**
+     * Service-account key for the app's Firebase project: Servon Manager tokens use
+     * manager_credentials when that file exists, everything else the main key.
+     */
+    private function credentials(?string $app): ?array
+    {
+        $paths = $app === 'manager' ? [$this->config['manager_credentials'] ?? null, $this->config['credentials'] ?? null] : [$this->config['credentials'] ?? null];
+        foreach (array_filter($paths) as $path) {
+            if (is_readable((string) $path)) {
+                $json = json_decode((string) file_get_contents($path), true);
+                if (is_array($json) && isset($json['project_id'], $json['client_email'], $json['private_key'])) {
+                    return $json;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private function accessToken(array $credentials): string
     {
-        return Cache::remember('fcm_access_token', 3000, function () use ($credentials) {
+        // One OAuth token per service account: two projects must never share a cached token.
+        return Cache::remember('fcm_access_token:'.sha1($credentials['client_email']), 3000, function () use ($credentials) {
             $now = time();
             $encode = fn ($data) => rtrim(strtr(base64_encode(json_encode($data)), '+/', '-_'), '=');
             $unsigned = $encode(['alg' => 'RS256', 'typ' => 'JWT']).'.'.$encode([

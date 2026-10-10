@@ -47,6 +47,8 @@ return [
     ],
     'fcm' => [
         'credentials' => env('FCM_CREDENTIALS', storage_path('app/private/fcm.json')),
+        // Servon Manager's Firebase project, if it has its own; falls back to the one above.
+        'manager_credentials' => env('FCM_MANAGER_CREDENTIALS', storage_path('app/private/fcm-manager.json')),
     ],
 
     'maps' => [
