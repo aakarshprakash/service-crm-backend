@@ -10,6 +10,7 @@ use App\Services\NotificationService;
 use App\Support\TenantContext;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Sanctum\PersonalAccessToken;
 
 /*
 | Scheduled tasks – run `php artisan schedule:work` (or cron `schedule:run`).
@@ -52,6 +53,8 @@ Schedule::call(function (NotificationService $notifications, TenantContext $cont
 // Housekeeping.
 Schedule::call(fn () => OtpCode::where('expires_at', '<', now()->subDay())->delete())->name('prune-otps')->daily();
 Schedule::command('sanctum:prune-expired --hours=24')->daily();
+Schedule::call(fn () => config('sanctum.idle_days') && PersonalAccessToken::whereRaw('COALESCE(last_used_at, created_at) < ?', [now()->subDays(config('sanctum.idle_days'))])->delete())
+    ->name('prune-idle-tokens')->daily();
 Schedule::command('queue:prune-failed --hours=720')->weekly();
 Schedule::call(function () {
     ReportExport::where('created_at', '<', now()->subDays(7))->get()->each(function (ReportExport $export) {

@@ -73,6 +73,21 @@ class RbacTest extends TestCase
         $this->postJson("/api/v1/jobs/{$otherJob->id}/visits/start", ['service_type' => 'tele_call'])->assertStatus(422);
     }
 
+    public function test_technician_stock_view_hides_purchase_cost(): void
+    {
+        ['tenant' => $tenant, 'admin' => $admin] = $this->makeTenant();
+        $this->makeItem($tenant, 5);
+        $technician = $this->makeUser($tenant, Role::Technician);
+
+        $this->actingAsUser($technician)->getJson('/api/v1/inventory/stock')->assertOk()
+            ->assertJsonPath('data.0.quantity_available', 5)
+            ->assertJsonMissingPath('data.0.avg_unit_cost')
+            ->assertJsonMissingPath('data.0.stock_value');
+        $office = $this->actingAsUser($admin)->getJson('/api/v1/inventory/stock')->assertOk()
+            ->assertJsonPath('data.0.avg_unit_cost', 30000);
+        $this->assertEquals(150000, $office->json('data.0.stock_value'));
+    }
+
     public function test_admin_cannot_deactivate_self_or_change_own_role(): void
     {
         ['admin' => $admin] = $this->makeTenant();

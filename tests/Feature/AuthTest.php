@@ -25,6 +25,23 @@ class AuthTest extends TestCase
         $this->withHeaders($this->spa)->getJson('/api/v1/auth/me')->assertOk()->assertJsonPath('data.user.email', $admin->email);
     }
 
+    public function test_app_tokens_expire_after_60_idle_days(): void
+    {
+        ['admin' => $admin] = $this->makeTenant();
+        $recent = $admin->createToken('phone-a');
+        $stale = $admin->createToken('phone-b');
+        $recent->accessToken->forceFill(['last_used_at' => now()->subDays(59)])->save();
+        $stale->accessToken->forceFill(['last_used_at' => now()->subDays(61)])->save();
+
+        $this->withToken($recent->plainTextToken)->getJson('/api/v1/auth/me')->assertOk();
+        $this->app['auth']->forgetGuards();
+        $this->withToken($stale->plainTextToken)->getJson('/api/v1/auth/me')->assertUnauthorized();
+
+        $this->artisan('schedule:test', ['--name' => 'prune-idle-tokens'])->assertSuccessful();
+        $this->assertModelMissing($stale->accessToken);
+        $this->assertModelExists($recent->accessToken);
+    }
+
     public function test_wrong_password_is_rejected_with_generic_message(): void
     {
         ['admin' => $admin] = $this->makeTenant();

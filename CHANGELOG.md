@@ -14,6 +14,7 @@
 - **Customer location sharing.** `POST /jobs/{id}/location` (paste a WhatsApp / Google Maps link, short links expanded safely), `POST /jobs/{id}/location-request` (link sent by SMS / WhatsApp, template `location_request`), public `/share-location/{token}`, and `POST /visits/{id}/customer-location` for the technician on site. The assigned technician is notified.
 
 ### Changed
+- **App sign-ins expire after 60 days without use** (`SANCTUM_IDLE_DAYS`, 0 = never). Idle tokens are refused with 401 and deleted by the daily `prune-idle-tokens` task.
 - `GET /expense-claims?status=` accepts several statuses (`approved,rejected`).
 - **Photo uploads accept full-size camera photos** (up to 25 MB, 12000 px). Large or rotated images are re-encoded server-side to a 2000 px JPEG with EXIF orientation applied (`App\Support\ImageOptimizer`). Docker PHP/nginx upload limits raised to 30 / 32 MB. Signatures don't count towards the 30-photo limit.
 - FCM messages use the app's `default` Android channel with sound; tokens reported `UNREGISTERED` are removed.
@@ -21,6 +22,7 @@
 - `POST /auth/logout` accepts `device_token` so the phone stops receiving the signed-out user's notifications.
 
 ### Fixed
+- Technicians could read purchase cost (`avg_unit_cost`) and `stock_value` from `GET /inventory/stock`; both are now returned to office roles only.
 - 8 MB+ camera photos were rejected with "The image field must not be greater than 8192 kilobytes."
 
 ## 2.1.0 — 2026-10-06

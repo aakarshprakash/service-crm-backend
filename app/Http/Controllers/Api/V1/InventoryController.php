@@ -87,12 +87,16 @@ class InventoryController extends Controller
                 ->whereColumn('inventory_stock.quantity_available', '<=', 'inventory_items.reorder_level'))
             ->select([
                 'inventory_stock.id', 'inventory_stock.branch_id', 'inventory_stock.item_id', 'inventory_stock.quantity_available',
-                'inventory_stock.avg_unit_cost', 'inventory_items.code', 'inventory_items.name', 'inventory_items.type',
+                'inventory_items.code', 'inventory_items.name', 'inventory_items.type',
                 'inventory_items.category', 'inventory_items.unit_of_measure', 'inventory_items.reorder_level', 'inventory_items.unit_price',
                 'branches.name as branch_name',
-                DB::raw('ROUND(inventory_stock.quantity_available * inventory_stock.avg_unit_cost) as stock_value'),
                 DB::raw('(inventory_items.reorder_level > 0 AND inventory_stock.quantity_available <= inventory_items.reorder_level) as is_low'),
             ])
+            // Purchase cost and valuation are office information, not for technicians.
+            ->unless($request->user()->isTechnician(), fn ($q) => $q->addSelect([
+                'inventory_stock.avg_unit_cost',
+                DB::raw('ROUND(inventory_stock.quantity_available * inventory_stock.avg_unit_cost) as stock_value'),
+            ]))
             ->orderBy('inventory_items.name')
             ->paginate($this->perPage($request));
 

@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
+use Laravel\Sanctum\PersonalAccessToken;
+use Laravel\Sanctum\Sanctum;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -45,6 +47,12 @@ class AppServiceProvider extends ServiceProvider
         // Password-reset links point to the React app.
         ResetPassword::createUrlUsing(fn ($user, string $token) => rtrim(config('app.frontend_url'), '/')
             .'/reset-password?'.http_build_query(['token' => $token, 'email' => $user->getEmailForPasswordReset()]));
+
+        Sanctum::authenticateAccessTokensUsing(function (PersonalAccessToken $token, bool $isValid) {
+            $idle = config('sanctum.idle_days');
+
+            return $isValid && (! $idle || ($token->last_used_at ?? $token->created_at)->gt(now()->subDays($idle)));
+        });
 
         $this->configureRateLimiting();
         $this->configureApiDocs();

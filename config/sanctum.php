@@ -52,6 +52,9 @@ return [
 
     'expiration' => null,
 
+    // App tokens (phones) stop working after this many days without use; 0 keeps them forever.
+    'idle_days' => (int) env('SANCTUM_IDLE_DAYS', 60),
+
     /*
     |--------------------------------------------------------------------------
     | Token Prefix
