@@ -105,6 +105,17 @@ class AccountSecurityTest extends TestCase
         $this->forgetGuards()->withToken($token)->getJson('/api/v1/auth/me')->assertUnauthorized();
     }
 
+    public function test_force_https_redirects_reads_and_refuses_writes_over_http(): void
+    {
+        config(['app.force_https' => true]);
+        $this->get('http://localhost/api/v1/version')->assertStatus(301)->assertRedirect('https://localhost/api/v1/version');
+        $this->postJson('http://localhost/api/v1/auth/login', ['email' => 'a@b.test', 'password' => 'x'])->assertForbidden();
+        $this->get('https://localhost/api/v1/version')->assertOk();
+
+        config(['app.force_https' => false]);
+        $this->get('http://localhost/api/v1/version')->assertOk();
+    }
+
     public function test_people_manage_their_own_sessions(): void
     {
         ['tenant' => $tenant] = $this->makeTenant();

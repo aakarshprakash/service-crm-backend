@@ -21,6 +21,8 @@ return [
     'min_mobile_version' => '2.1.0',
     // Same for the Servon Manager app (office staff).
     'min_manager_version' => '1.0.0',
+    // Refuse / redirect plain-HTTP requests (see App\Http\Middleware\ForceHttps).
+    'force_https' => (bool) env('FORCE_HTTPS', false),
 
     /*
     |--------------------------------------------------------------------------
