@@ -80,6 +80,21 @@ class TechnicianJobFlowTest extends TestCase
             ->assertJsonPath('data.previous_services.0.crm_call_id', $old->crm_call_id);
     }
 
+    public function test_visit_times_sent_with_an_offset_are_stored_in_utc(): void
+    {
+        ['tenant' => $tenant] = $this->makeTenant();
+        $coordinator = $this->makeUser($tenant, Role::Coordinator);
+        $customer = $this->makeCustomer($tenant);
+
+        $id = $this->actingAsUser($coordinator)->postJson('/api/v1/jobs', [
+            'customer_id' => $customer->id, 'priority' => 'low', 'call_type' => 'crm_call', 'scheduled_at' => '2026-10-15T15:30:00+05:30',
+        ])->assertCreated()->json('data.id');
+        $this->assertDatabaseHas('service_jobs', ['id' => $id, 'scheduled_at' => '2026-10-15 10:00:00']);
+
+        $this->patchJson("/api/v1/jobs/{$id}/reschedule", ['scheduled_at' => '2026-10-16T09:00:00Z'])->assertOk();
+        $this->assertDatabaseHas('service_jobs', ['id' => $id, 'scheduled_at' => '2026-10-16 09:00:00']);
+    }
+
     public function test_dashboard_explains_the_punch_rules_to_the_technician(): void
     {
         ['tenant' => $tenant] = $this->makeTenant();

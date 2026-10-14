@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\JobStatus;
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
+use App\Models\Concerns\StoresUtc;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -17,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  */
 class ServiceJob extends Model
 {
-    use Auditable, BelongsToTenant;
+    use Auditable, BelongsToTenant, StoresUtc;
 
     protected $fillable = [
         'crm_call_id', 'customer_id', 'customer_product_id', 'branch_id', 'service_location_id', 'complaint_type_id', 'complaint_summary_id',
