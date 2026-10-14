@@ -58,6 +58,7 @@ class ServiceExecutionTest extends TestCase
         $item = $this->makeItem($tenant, 5);
         $action = $this->inTenant($tenant, fn () => ActionTakenOption::first());
 
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
 
         // FR-6.2: on-site visit needs location.
@@ -110,6 +111,7 @@ class ServiceExecutionTest extends TestCase
         ['tenant' => $tenant] = $this->makeTenant();
         $tech = $this->makeUser($tenant, Role::Technician);
         $job = $this->makeJob($tenant, $this->makeCustomer($tenant), $tech);
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
 
         $v1 = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'tele_call'])->json('data.id');
@@ -134,6 +136,7 @@ class ServiceExecutionTest extends TestCase
         $tech = $this->makeUser($tenant, Role::Technician);
         $job = $this->makeJob($tenant, $this->makeCustomer($tenant), $tech);
         $action = $this->inTenant($tenant, fn () => ActionTakenOption::first());
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
 
         $v = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'tele_call'])->json('data.id');

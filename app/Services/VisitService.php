@@ -47,6 +47,10 @@ class VisitService
                     ? 'A visit is already in progress for this job.'
                     : 'This job is '.$job->status->value.'.']);
             }
+            $tenant = Tenant::findOrFail($job->tenant_id);
+            if ($tenant->setting('jobs.require_punch_in', true) && User::whereKey($technician->id)->value('punch_status') !== 'in') {
+                throw ValidationException::withMessages(['punch' => 'Punch in before you start a service.']);
+            }
             if ($data['service_type'] === 'on_site' && (! isset($data['lat'], $data['lng']))) {
                 // FR-6.2: location must be available before an on-site visit starts.
                 throw ValidationException::withMessages(['location' => 'Turn on location services to start an on-site visit.']);
@@ -56,7 +60,7 @@ class VisitService
                 throw ValidationException::withMessages(['job' => "Finish your active visit on job {$open->job?->crm_call_id} first."]);
             }
 
-            $tz = Tenant::whereKey($job->tenant_id)->value('timezone') ?? config('app.timezone');
+            $tz = $tenant->timezone ?? config('app.timezone');
             $visit = JobVisit::create([
                 'job_id' => $job->id,
                 'technician_id' => $technician->id,
@@ -81,21 +85,40 @@ class VisitService
         $this->ensureOpen($visit);
 
         return DB::transaction(function () use ($visit, $data) {
-            $job = $visit->job;
-            $job->fill(array_intersect_key($data, array_flip(['complaint_details', 'complaint_type_id', 'complaint_summary_id', 'priority', 'call_type'])))->save();
-
-            $customerFields = array_intersect_key($data, array_flip(['address', 'city', 'pincode', 'alt_phone']));
-            if ($customerFields) {
-                $job->customer->fill($customerFields)->save();
-            }
-            $productFields = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no']));
-            if ($productFields && $job->customerProduct) {
-                $job->customerProduct->fill($productFields)->save();
-            }
+            $this->applyCallDetails($visit->job, $data);
             $visit->fill(array_intersect_key($data, array_flip(['service_summary', 'service_type'])))->save();
 
             return $visit;
         });
+    }
+
+    /** "Check details" before the visit starts: the same call fields, on an open or pending job assigned to the technician. */
+    public function prepareJob(ServiceJob $job, User $technician, array $data): ServiceJob
+    {
+        if ($job->assigned_technician_id !== $technician->id) {
+            throw ValidationException::withMessages(['job' => 'This job is not assigned to you.']);
+        }
+        if (! in_array($job->status, [JobStatus::Open, JobStatus::Pending], true)) {
+            throw ValidationException::withMessages(['job' => 'Only open or pending jobs can be updated before a visit.']);
+        }
+
+        return DB::transaction(fn () => $this->applyCallDetails($job, $data));
+    }
+
+    private function applyCallDetails(ServiceJob $job, array $data): ServiceJob
+    {
+        $job->fill(array_intersect_key($data, array_flip(['complaint_details', 'complaint_type_id', 'complaint_summary_id', 'priority', 'call_type'])))->save();
+
+        $customerFields = array_intersect_key($data, array_flip(['address', 'city', 'pincode', 'alt_phone']));
+        if ($customerFields) {
+            $job->customer->fill($customerFields)->save();
+        }
+        $productFields = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no']));
+        if ($productFields && $job->customerProduct) {
+            $job->customerProduct->fill($productFields)->save();
+        }
+
+        return $job;
     }
 
     public function addInventory(JobVisit $visit, User $technician, array $data): JobInventoryUsage

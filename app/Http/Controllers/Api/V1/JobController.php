@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Enums\JobStatus;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerProduct;
+use App\Models\JobVisit;
 use App\Models\ServiceJob;
 use App\Models\User;
 use App\Services\JobService;
@@ -23,8 +24,8 @@ class JobController extends Controller
     {
         $query = $this->filtered($request)
             ->with([
-                'customer:id,name,phone,city', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
-                'complaintType:id,name', 'customerProduct:id,product_id,serial_no', 'customerProduct.product:id,model_name,brand_id',
+                'customer:id,name,phone,address,city,pincode', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
+                'complaintType:id,name', 'customerProduct:id,product_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
                 'customerProduct.product.brand:id,name',
             ]);
 
@@ -36,7 +37,11 @@ class JobController extends Controller
             default => $query->latest('id'),
         };
 
-        return $this->paginated($query->paginate($this->perPage($request)));
+        return $this->paginated($query->paginate($this->perPage($request)), function (ServiceJob $job) {
+            $job->customerProduct?->setAttribute('under_warranty', $job->customerProduct->isUnderWarranty());
+
+            return $job;
+        });
     }
 
     /** Status counters (technician dashboard FR-3.1 and board header). */
@@ -105,8 +110,35 @@ class JobController extends Controller
 
         $this->authorizeView($request->user(), $job);
         $job->customerProduct?->setAttribute('under_warranty', $job->customerProduct->isUnderWarranty());
+        $job->setAttribute('previous_services', $this->previousServices($job));
 
         return $this->ok($job);
+    }
+
+    /**
+     * Earlier finished visits for the same product (or, with no product, the same customer) on other jobs,
+     * so whoever opens the job sees what was done last time.
+     */
+    private function previousServices(ServiceJob $job): array
+    {
+        return JobVisit::query()
+            ->whereIn('status', ['completed', 'pending'])
+            ->whereHas('job', fn ($q) => $q->whereKeyNot($job->id)->where('customer_id', $job->customer_id)
+                ->when($job->customer_product_id, fn ($q) => $q->where('customer_product_id', $job->customer_product_id)))
+            ->with(['job:id,crm_call_id,complaint_type_id', 'job.complaintType:id,name', 'technician:id,name', 'actionTaken:id,name'])
+            ->latest('start_time')->limit(3)
+            ->get()
+            ->map(fn (JobVisit $v) => [
+                'job_id' => $v->job_id,
+                'crm_call_id' => $v->job?->crm_call_id,
+                'date' => $v->start_time,
+                'status' => $v->status,
+                'complaint' => $v->job?->complaintType?->name,
+                'action_taken' => $v->actionTaken?->name,
+                'summary' => $v->service_summary,
+                'technician' => $v->technician?->name,
+                'total_charge' => $v->total_charge,
+            ])->all();
     }
 
     public function update(Request $request, int $id): JsonResponse

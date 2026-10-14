@@ -24,6 +24,7 @@ class VisitUploadSignatureTest extends TestCase
         ['tenant' => $tenant] = $this->makeTenant();
         $tech = $this->makeUser($tenant, Role::Technician);
         $job = $this->makeJob($tenant, $this->makeCustomer($tenant), $tech);
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $visitId = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->assertCreated()->json('data.id');
 

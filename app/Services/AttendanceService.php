@@ -57,7 +57,9 @@ class AttendanceService
             $distance = (int) round(Geo::distance((float) $data['lat'], (float) $data['lng'], $branch->lat, $branch->lng));
             // Allow for GPS error: a fix whose accuracy circle overlaps the fence counts as inside.
             $slack = min(100, (float) ($data['accuracy'] ?? 0));
-            $within = $distance <= $branch->geofence_radius + $slack;
+            // Distance is always kept; inside/outside only for people the geofence applies to,
+            // so exempt staff (technicians by default) are never flagged.
+            $within = $applies ? $distance <= $branch->geofence_radius + $slack : null;
             if ($applies && $mode === 'enforce' && ! $within) {
                 throw ValidationException::withMessages(['location' => "You are about {$this->human($distance)} from {$branch->name}. Punch in within {$branch->geofence_radius} m of the office."]);
             }

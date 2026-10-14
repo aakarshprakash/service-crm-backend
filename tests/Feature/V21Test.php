@@ -91,7 +91,9 @@ class V21Test extends TestCase
         $this->postJson('/api/v1/punch', ['type' => 'in'])->assertStatus(422)->assertJsonValidationErrors('location');
         // Technicians are exempt unless the company turns it on.
         $tech = $this->makeUser($this->tenant, Role::Technician);
-        $this->forgetGuards()->actingAsUser($tech)->postJson('/api/v1/punch', ['type' => 'in'] + $far)->assertOk();
+        // ...and their punches aren't flagged as outside: the distance is kept, the flag isn't set.
+        $this->forgetGuards()->actingAsUser($tech)->postJson('/api/v1/punch', ['type' => 'in'] + $far)->assertOk()
+            ->assertJsonPath('data.within_fence', null)->assertJsonPath('data.distance_m', fn ($d) => $d > 1000);
 
         $this->assertSame(3, $this->inTenant($this->tenant, fn () => PunchLog::count()));
         $this->forgetGuards()->actingAsUser($this->admin)->getJson('/api/v1/hr/attendance/daily')->assertOk()->assertJsonPath('meta.present', 2);

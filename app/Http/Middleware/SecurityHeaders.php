@@ -38,6 +38,11 @@ class SecurityHeaders
             }
         }
         $response->headers->remove('X-Powered-By');
+        // PHP adds its own X-Powered-By (expose_php) outside the response object: drop that too,
+        // so the server's PHP version isn't advertised.
+        if (! headers_sent()) {
+            header_remove('X-Powered-By');
+        }
 
         return $response;
     }

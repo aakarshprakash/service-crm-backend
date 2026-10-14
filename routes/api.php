@@ -70,7 +70,7 @@ Route::prefix('v1')->group(function () {
     });
 
     // ---- Authenticated ------------------------------------------------------
-    Route::middleware(['auth:sanctum', 'tenant', 'throttle:api'])->group(function () {
+    Route::middleware(['auth:sanctum', 'tenant', 'password.current', 'throttle:api'])->group(function () {
 
         Route::prefix('auth')->group(function () {
             Route::get('me', [AuthController::class, 'me']);
@@ -84,6 +84,10 @@ Route::prefix('v1')->group(function () {
             // 2.1.2 re-register the push token in a loop, which must not lock the user out.
             Route::post('device', [AuthController::class, 'registerDevice'])->withoutMiddleware('throttle:api')->middleware('throttle:device');
             Route::post('device/test', [AuthController::class, 'testPush'])->middleware('throttle:5,1');
+            // Own signed-in devices: see them and sign out the others.
+            Route::get('sessions', [AuthController::class, 'sessions']);
+            Route::delete('sessions/{id}', [AuthController::class, 'revokeSession'])->whereNumber('id');
+            Route::post('sessions/sign-out-others', [AuthController::class, 'signOutOthers']);
         });
         Route::post('impersonation/stop', [PlatformController::class, 'stopImpersonating']);
 
@@ -119,6 +123,11 @@ Route::prefix('v1')->group(function () {
             Route::patch('users/{id}', [UserController::class, 'update'])->whereNumber('id');
             Route::patch('users/{id}/status', [UserController::class, 'setStatus'])->whereNumber('id');
             Route::post('users/{id}/invite', [UserController::class, 'resendInvite'])->whereNumber('id');
+            // Access control for staff logins (web, Technician app, Manager app).
+            Route::get('users/{id}/sessions', [UserController::class, 'sessions'])->whereNumber('id');
+            Route::delete('users/{id}/sessions/{session}', [UserController::class, 'revokeSession'])->whereNumber(['id', 'session']);
+            Route::post('users/{id}/sign-out', [UserController::class, 'signOutEverywhere'])->whereNumber('id');
+            Route::post('users/{id}/password', [UserController::class, 'resetPassword'])->whereNumber('id')->middleware('throttle:20,1');
         });
         Route::post('punch', [HrController::class, 'punch'])->middleware('can:punch');
 
@@ -169,6 +178,7 @@ Route::prefix('v1')->group(function () {
         // Service execution (§5.6) – technician only
         Route::middleware('can:visits.execute')->group(function () {
             Route::post('jobs/{id}/visits/start', [VisitController::class, 'start'])->whereNumber('id');
+            Route::patch('jobs/{id}/details', [VisitController::class, 'prepare'])->whereNumber('id');
             Route::get('visits/active', [VisitController::class, 'active']);
             Route::get('visits/{id}', [VisitController::class, 'show'])->whereNumber('id');
             Route::patch('visits/{id}', [VisitController::class, 'update'])->whereNumber('id');
