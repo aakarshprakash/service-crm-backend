@@ -6,6 +6,7 @@ use App\Enums\JobStatus;
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
 use App\Models\Concerns\StoresUtc;
+use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -54,8 +55,10 @@ class ServiceJob extends Model
             return 0;
         }
         $end = $this->completed_at ?? $this->cancelled_at ?? now();
+        // Calendar days where the company is: a job logged at 2 am in India is not "1 day old" at 6 am.
+        $tz = app(TenantContext::class)->tenant()?->timezone ?? config('app.timezone');
 
-        return (int) $this->created_at->copy()->startOfDay()->diffInDays($end->copy()->startOfDay());
+        return (int) $this->created_at->copy()->timezone($tz)->startOfDay()->diffInDays($end->copy()->timezone($tz)->startOfDay());
     }
 
     public function scopeSearch(Builder $query, ?string $term): Builder

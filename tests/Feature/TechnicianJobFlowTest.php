@@ -95,6 +95,21 @@ class TechnicianJobFlowTest extends TestCase
         $this->assertDatabaseHas('service_jobs', ['id' => $id, 'scheduled_at' => '2026-10-16 09:00:00']);
     }
 
+    public function test_call_age_counts_days_in_the_company_timezone(): void
+    {
+        ['tenant' => $tenant] = $this->makeTenant();
+        $tenant->update(['timezone' => 'Asia/Kolkata']);
+        $tech = $this->makeUser($tenant, Role::Technician);
+        // Logged at 02:02 IST on the 15th (20:32 UTC on the 14th), looked at 07:10 IST the same day.
+        $this->travelTo(\Carbon\CarbonImmutable::parse('2026-10-14 20:32:00', 'UTC'));
+        $job = $this->makeJob($tenant, $this->makeCustomer($tenant), $tech);
+        $this->travelTo(\Carbon\CarbonImmutable::parse('2026-10-15 01:40:00', 'UTC'));
+        $this->actingAsUser($tech)->getJson("/api/v1/jobs/{$job->id}")->assertJsonPath('data.call_age_days', 0);
+
+        $this->travelTo(\Carbon\CarbonImmutable::parse('2026-10-15 19:00:00', 'UTC')); // 00:30 IST on the 16th
+        $this->getJson("/api/v1/jobs/{$job->id}")->assertJsonPath('data.call_age_days', 1);
+    }
+
     public function test_dashboard_explains_the_punch_rules_to_the_technician(): void
     {
         ['tenant' => $tenant] = $this->makeTenant();
