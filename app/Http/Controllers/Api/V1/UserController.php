@@ -8,6 +8,8 @@ use App\Models\Branch;
 use App\Models\PunchLog;
 use App\Models\User;
 use App\Notifications\UserInvitation;
+use App\Support\Audit;
+use App\Support\Sessions;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -63,6 +65,8 @@ class UserController extends Controller
         $user = new User($data);
         $user->tenant_id = $tenant->id;
         $user->status = ! empty($data['password']) ? 'active' : 'invited';
+        // A password chosen by the admin is temporary: the person picks their own at first sign-in.
+        $user->must_change_password = ! empty($data['password']);
         $user->save();
         if ($locations !== null) {
             $user->serviceLocations()->sync($locations);
@@ -89,10 +93,17 @@ class UserController extends Controller
         if (isset($data['role']) && $data['role'] !== $user->role->value) {
             $this->enforcePlanLimits($data['role']);
         }
-        if (empty($data['password'])) {
+        $newPassword = ! empty($data['password']);
+        if (! $newPassword) {
             unset($data['password']);
         }
         $user->update($data);
+        if ($newPassword && $user->id !== $request->user()->id) {
+            // Same as "Set temporary password": old sessions end, a new password is chosen at sign-in.
+            $user->forceFill(['must_change_password' => true])->save();
+            Sessions::revokeAll($user);
+            Audit::log('user.password_set', $user);
+        }
         if ($locations !== null) {
             $user->serviceLocations()->sync($locations);
         }
@@ -113,10 +124,100 @@ class UserController extends Controller
         }
         $user->update(['status' => $data['status']]);
         if ($data['status'] === 'inactive') {
-            $user->tokens()->delete();
+            Sessions::revokeAll($user);
         }
 
         return $this->ok($user, $data['status'] === 'active' ? 'User activated.' : 'User deactivated.');
+    }
+
+    /** Where this person is signed in: web browsers, Technician app, Manager app. */
+    public function sessions(int $id): JsonResponse
+    {
+        $user = $this->staff($id);
+
+        return $this->ok([
+            'sessions' => Sessions::list($user),
+            'push_devices' => $user->deviceTokens()->get(['id', 'platform', 'app', 'updated_at']),
+            'last_login_at' => $user->last_login_at,
+            'password_changed_at' => $user->password_changed_at,
+            'must_change_password' => $user->mustChangePassword(),
+            'two_factor_enabled' => $user->hasTwoFactor(),
+        ]);
+    }
+
+    /** Signs the person out of one device (e.g. a lost phone). */
+    public function revokeSession(Request $request, int $id, int $session): JsonResponse
+    {
+        $user = $this->staff($id);
+        $token = $user->tokens()->whereKey($session)->firstOrFail();
+        $token->delete();
+        // No phone of that app left signed in: stop its push notifications too.
+        if ($token->app && $token->app !== 'web' && ! $user->tokens()->where('app', $token->app)->exists()) {
+            $user->deviceTokens()->where('app', $token->app)->delete();
+        }
+        Audit::log('user.session_revoked', $user, ['session' => $session, 'device' => $token->name]);
+
+        return $this->ok(null, "{$user->name} was signed out of {$token->name}.");
+    }
+
+    /** Remote sign-out from every browser and phone, without deactivating the account. */
+    public function signOutEverywhere(Request $request, int $id): JsonResponse
+    {
+        $user = $this->staff($id);
+        if ($user->id === $request->user()->id) {
+            throw ValidationException::withMessages(['user' => 'Use “Sign out other devices” on your profile to sign yourself out elsewhere.']);
+        }
+        $count = Sessions::revokeAll($user);
+        Audit::log('user.signed_out', $user, ['sessions' => $count]);
+
+        return $this->ok(['signed_out' => $count], "{$user->name} was signed out of {$count} device(s).");
+    }
+
+    /**
+     * Password help from the admin: either a temporary password (shown once, must be changed at the
+     * next sign-in) or a reset link by email. Both sign the person out everywhere.
+     */
+    public function resetPassword(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'mode' => ['required', Rule::in(['temporary', 'link'])],
+            'password' => ['nullable', 'string', PasswordRule::defaults()],
+        ]);
+        $user = $this->staff($id);
+        if ($user->id === $request->user()->id) {
+            throw ValidationException::withMessages(['user' => 'Change your own password from your profile.']);
+        }
+
+        if ($data['mode'] === 'link') {
+            if (! $user->email) {
+                throw ValidationException::withMessages(['mode' => 'This person has no email address. Set a temporary password instead.']);
+            }
+            Password::broker()->sendResetLink(['email' => $user->email]);
+            Sessions::revokeAll($user);
+            Audit::log('user.password_reset_link', $user);
+
+            return $this->ok(null, "A password reset link was emailed to {$user->email}. They have been signed out.");
+        }
+
+        $temporary = $data['password'] ?? $this->temporaryPassword();
+        $user->forceFill(['password' => $temporary, 'must_change_password' => true, 'status' => $user->status === 'invited' ? 'active' : $user->status])->save();
+        Sessions::revokeAll($user);
+        Audit::log('user.password_set', $user);
+
+        return $this->ok(['temporary_password' => $temporary], 'Temporary password set. Share it with them privately; they choose their own at the next sign-in.');
+    }
+
+    /** Readable but strong: e.g. "Kite-7429-Moss". */
+    private function temporaryPassword(): string
+    {
+        $words = ['Kite', 'Moss', 'Reef', 'Pine', 'Lark', 'Dune', 'Fern', 'Opal', 'Sage', 'Wren', 'Flint', 'Cove', 'Birch', 'Comet', 'Delta', 'Ember'];
+
+        return $words[random_int(0, 15)].'-'.random_int(1000, 9999).'-'.strtolower($words[random_int(0, 15)]).'!';
+    }
+
+    private function staff(int $id): User
+    {
+        return User::inTenant()->where('role', '!=', Role::Customer->value)->findOrFail($id);
     }
 
     public function resendInvite(int $id): JsonResponse

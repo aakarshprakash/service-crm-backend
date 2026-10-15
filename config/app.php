@@ -16,11 +16,13 @@ return [
     'name' => env('APP_NAME', 'Laravel'),
 
     // Product version (web app, API and mobile app are released together).
-    'version' => '2.1.0',
+    'version' => '2.2.0',
     // Oldest mobile app version the API still supports; older apps are asked to update.
     'min_mobile_version' => '2.1.0',
     // Same for the Servon Manager app (office staff).
     'min_manager_version' => '1.0.0',
+    // Refuse / redirect plain-HTTP requests (see App\Http\Middleware\ForceHttps).
+    'force_https' => (bool) env('FORCE_HTTPS', false),
 
     /*
     |--------------------------------------------------------------------------

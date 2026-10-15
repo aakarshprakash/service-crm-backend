@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Middleware\EnsurePasswordChanged;
+use App\Http\Middleware\ForceHttps;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -24,8 +26,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Sanctum SPA cookie auth for the web app; bearer tokens for Android.
         $middleware->statefulApi();
+        $middleware->prepend(ForceHttps::class);
         $middleware->append(SecurityHeaders::class);
-        $middleware->alias(['tenant' => ResolveTenant::class]);
+        $middleware->alias(['tenant' => ResolveTenant::class, 'password.current' => EnsurePasswordChanged::class]);
         $middleware->trustProxies(at: env('TRUSTED_PROXIES', '127.0.0.1'));
         $middleware->encryptCookies(except: []);
         $middleware->validateCsrfTokens(except: ['api/v1/payments/webhook/*']);

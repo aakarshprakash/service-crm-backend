@@ -5,6 +5,8 @@ namespace App\Models;
 use App\Enums\JobStatus;
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
+use App\Models\Concerns\StoresUtc;
+use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -17,7 +19,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  */
 class ServiceJob extends Model
 {
-    use Auditable, BelongsToTenant;
+    use Auditable, BelongsToTenant, StoresUtc;
 
     protected $fillable = [
         'crm_call_id', 'customer_id', 'customer_product_id', 'branch_id', 'service_location_id', 'complaint_type_id', 'complaint_summary_id',
@@ -53,8 +55,10 @@ class ServiceJob extends Model
             return 0;
         }
         $end = $this->completed_at ?? $this->cancelled_at ?? now();
+        // Calendar days where the company is: a job logged at 2 am in India is not "1 day old" at 6 am.
+        $tz = app(TenantContext::class)->tenant()?->timezone ?? config('app.timezone');
 
-        return (int) $this->created_at->copy()->startOfDay()->diffInDays($end->copy()->startOfDay());
+        return (int) $this->created_at->copy()->timezone($tz)->startOfDay()->diffInDays($end->copy()->timezone($tz)->startOfDay());
     }
 
     public function scopeSearch(Builder $query, ?string $term): Builder

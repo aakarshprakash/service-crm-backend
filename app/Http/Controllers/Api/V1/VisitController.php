@@ -55,10 +55,31 @@ class VisitController extends Controller
 
     public function update(Request $request, int $id): JsonResponse
     {
-        $tenantId = app(TenantContext::class)->id();
         $data = $request->validate([
             'service_type' => ['sometimes', Rule::in(['on_site', 'tele_call', 'office'])],
             'service_summary' => ['nullable', 'string', 'max:2000'],
+            ...$this->callRules(),
+        ]);
+        $visit = $this->visits->updateCallDetails($this->ownVisit($request, $id), $data);
+
+        return $this->ok($visit, 'Saved.');
+    }
+
+    /** "Check details" before starting: correct the call, address and serials on an assigned job. */
+    public function prepare(Request $request, int $jobId): JsonResponse
+    {
+        $data = $request->validate($this->callRules());
+        $job = $this->visits->prepareJob(ServiceJob::findOrFail($jobId), $request->user(), $data);
+
+        return $this->ok($job, 'Details saved.');
+    }
+
+    /** Job, customer and product fields a technician may correct (FR-6.5). */
+    private function callRules(): array
+    {
+        $tenantId = app(TenantContext::class)->id();
+
+        return [
             'complaint_details' => ['nullable', 'string', 'max:2000'],
             'complaint_type_id' => ['nullable', 'integer', Rule::exists('complaint_types', 'id')->where('tenant_id', $tenantId)],
             'complaint_summary_id' => ['nullable', 'integer', Rule::exists('complaint_summaries', 'id')->where('tenant_id', $tenantId)],
@@ -70,10 +91,7 @@ class VisitController extends Controller
             'alt_phone' => ['nullable', 'string', 'regex:/^\+?[0-9]{10,15}$/'],
             'serial_no' => ['nullable', 'string', 'max:100'],
             'outdoor_serial_no' => ['nullable', 'string', 'max:100'],
-        ]);
-        $visit = $this->visits->updateCallDetails($this->ownVisit($request, $id), $data);
-
-        return $this->ok($visit, 'Saved.');
+        ];
     }
 
     /**

@@ -68,6 +68,14 @@ abstract class TestCase extends BaseTestCase
         return app(TenantContext::class)->runAs($tenant->id, $callback);
     }
 
+    /** Mark a user on duty: technicians must be punched in to start a visit. */
+    protected function punchIn(User $user): User
+    {
+        $user->forceFill(['punch_status' => 'in', 'punched_at' => now()])->save();
+
+        return $user;
+    }
+
     protected function actingAsUser(User $user): static
     {
         Sanctum::actingAs($user);

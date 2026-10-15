@@ -76,6 +76,7 @@ class SettingsController extends Controller
             'auto_assign_on_duty_only' => ['sometimes', 'boolean'],
             'jobs' => ['sometimes', 'array'],
             'jobs.require_signature' => ['sometimes', 'boolean'],
+            'jobs.require_punch_in' => ['sometimes', 'boolean'],
             'attendance' => ['sometimes', 'array'],
             'attendance.geofence' => ['sometimes', Rule::in(['off', 'flag', 'enforce'])],
             'attendance.geofence_technicians' => ['sometimes', 'boolean'],

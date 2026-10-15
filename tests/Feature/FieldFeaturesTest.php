@@ -40,6 +40,7 @@ class FieldFeaturesTest extends TestCase
     /** Completes a visit with a cash collection so the technician has cash in hand. */
     private function collectCash($tenant, $tech, ServiceJob $job, int $amount): void
     {
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $visitId = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->assertCreated()->json('data.id');
         $action = $this->inTenant($tenant, fn () => ActionTakenOption::first());
@@ -56,6 +57,7 @@ class FieldFeaturesTest extends TestCase
         $this->collectCash($tenant, $tech, $job, 150000);
         $today = now($tenant->timezone)->toDateString();
 
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $claimId = $this->postJson('/api/v1/my/expenses', [
             'expense_category_id' => $category->id, 'amount' => 20000, 'claim_date' => $today,
@@ -97,6 +99,7 @@ class FieldFeaturesTest extends TestCase
         ['tenant' => $tenant, 'tech' => $tech, 'admin' => $admin, 'job' => $job, 'category' => $category] = $this->setUpField();
         $this->collectCash($tenant, $tech, $job, 100000);
         $today = now($tenant->timezone)->toDateString();
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $claimId = $this->postJson('/api/v1/my/expenses', ['expense_category_id' => $category->id, 'amount' => 30000, 'claim_date' => $today, 'paid_from' => 'cash_in_hand'])->json('data.id');
         $closeId = $this->postJson('/api/v1/accounts/cash-close', ['date' => $today, 'amount_confirmed' => 70000])->json('data.id');
@@ -116,6 +119,7 @@ class FieldFeaturesTest extends TestCase
         $otherJob = $this->makeJob($tenant, $this->makeCustomer($tenant, ['phone' => '9811111111']), $other);
         $today = now($tenant->timezone)->toDateString();
 
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $this->postJson('/api/v1/my/expenses', ['expense_category_id' => $category->id, 'amount' => 5000, 'claim_date' => $today, 'paid_from' => 'own_money', 'job_id' => $otherJob->id])
             ->assertStatus(422)->assertJsonValidationErrors('job_id');
@@ -140,6 +144,7 @@ class FieldFeaturesTest extends TestCase
     {
         Storage::fake('private');
         ['tenant' => $tenant, 'tech' => $tech, 'job' => $job] = $this->setUpField();
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $visitId = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->json('data.id');
 
@@ -179,6 +184,7 @@ class FieldFeaturesTest extends TestCase
         $this->getJson('/api/v1/share-location/'.str_repeat('a', 40))->assertNotFound();
 
         // Technician on site.
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $visitId = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->json('data.id');
         $this->postJson("/api/v1/visits/{$visitId}/customer-location", ['lat' => 12.5, 'lng' => 77.1])->assertOk()->assertJsonPath('data.location_source', 'technician');
@@ -202,6 +208,7 @@ class FieldFeaturesTest extends TestCase
     public function test_upi_payment_without_reference_is_accepted(): void
     {
         ['tenant' => $tenant, 'tech' => $tech, 'job' => $job] = $this->setUpField();
+        $this->punchIn($tech);
         $this->actingAsUser($tech);
         $visitId = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->json('data.id');
         $action = $this->inTenant($tenant, fn () => ActionTakenOption::first());

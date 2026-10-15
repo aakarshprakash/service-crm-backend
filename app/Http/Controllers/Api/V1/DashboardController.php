@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\Role;
 use App\Http\Controllers\Controller;
+use App\Models\Branch;
 use App\Models\CashClose;
 use App\Models\InventoryStock;
 use App\Models\Invoice;
@@ -43,8 +45,13 @@ class DashboardController extends Controller
             ->whereIn('status', ['open', 'pending', 'in_progress'])
             ->where(fn ($q) => $q->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()])
                 ->orWhere('scheduled_at', '<', now($tz)->startOfDay()->utc()))
-            ->with(['customer:id,name,phone,address,city', 'complaintType:id,name'])
-            ->orderBy('scheduled_at')->limit(20)->get();
+            ->with([
+                'customer:id,name,phone,address,city,pincode', 'complaintType:id,name', 'serviceLocation:id,name',
+                'customerProduct:id,product_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
+                'customerProduct.product.brand:id,name',
+            ])
+            ->orderBy('scheduled_at')->limit(20)->get()
+            ->each(fn (ServiceJob $j) => $j->customerProduct?->setAttribute('under_warranty', $j->customerProduct->isUnderWarranty()));
 
         return $this->ok([
             'counts' => [
@@ -56,11 +63,31 @@ class DashboardController extends Controller
             'today' => $today,
             'punch_status' => $user->punch_status,
             'punched_at' => $user->punched_at,
+            'attendance' => $this->punchRules($user),
             'cash_in_hand' => $cash->cashInHand($user),
             'active_visit' => JobVisit::where('technician_id', $user->id)->where('status', 'in_progress')->with('job:id,crm_call_id')->first(),
             'collected_today' => (int) Payment::where('collected_by', $user->id)->where('status', 'success')
                 ->where('paid_at', '>=', now($tz)->startOfDay()->utc())->sum('amount'),
         ]);
+    }
+
+    /**
+     * What the app tells a technician about punching: whether the branch geofence applies to them
+     * (off / flag / enforce), the office location and radius, and whether a visit needs a punch-in first.
+     */
+    private function punchRules(User $user): array
+    {
+        $tenant = app(TenantContext::class)->tenant();
+        $mode = $tenant->setting('attendance.geofence', 'off');
+        $applies = $mode !== 'off' && ($user->role !== Role::Technician || $tenant->setting('attendance.geofence_technicians', false));
+        $branch = $user->branch_id ? Branch::find($user->branch_id) : null;
+
+        return [
+            'geofence' => $applies && $branch?->hasGeofence() ? $mode : 'off',
+            'branch' => $branch ? ['name' => $branch->name, 'lat' => $branch->lat, 'lng' => $branch->lng, 'radius' => $branch->geofence_radius] : null,
+            'require_location' => (bool) $tenant->setting('attendance.require_location', false),
+            'require_punch_in' => (bool) $tenant->setting('jobs.require_punch_in', true),
+        ];
     }
 
     private function build(string $tz, ?int $branchId): array

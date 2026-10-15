@@ -37,6 +37,8 @@ class User extends Authenticatable
             'punched_at' => 'datetime',
             'two_factor_confirmed_at' => 'datetime',
             'two_factor_secret' => 'encrypted',
+            'must_change_password' => 'boolean',
+            'password_changed_at' => 'datetime',
             'password' => 'hashed',
             'role' => Role::class,
         ];
@@ -113,6 +115,12 @@ class User extends Authenticatable
     public function isActive(): bool
     {
         return $this->status === 'active';
+    }
+
+    /** Signed in with a temporary password set by an admin (safe on partially loaded models). */
+    public function mustChangePassword(): bool
+    {
+        return (bool) ($this->attributes['must_change_password'] ?? false);
     }
 
     public function hasTwoFactor(): bool

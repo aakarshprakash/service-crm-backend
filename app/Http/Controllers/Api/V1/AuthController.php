@@ -14,6 +14,7 @@ use App\Services\OtpService;
 use App\Services\TenantProvisioningService;
 use App\Support\Audit;
 use App\Support\Impersonation;
+use App\Support\Sessions;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -129,7 +130,7 @@ class AuthController extends Controller
 
         $user->forceFill(['last_login_at' => now()])->saveQuietly();
         // Manager app tokens are marked so they stop working if the plan loses the add-on (ResolveTenant).
-        $token = $user->createToken(mb_substr($data['device_name'], 0, 100), $manager ? ['*', 'app:manager'] : ['*'], now()->addDays(30));
+        $token = Sessions::issue($user, mb_substr($data['device_name'], 0, 100), $manager ? ['*', 'app:manager'] : ['*'], now()->addDays(30), $manager ? 'manager' : 'technician', $request);
         Audit::log('auth.token', $user, ['device' => $data['device_name']], $user->tenant_id);
 
         return $this->ok(['token' => $token->plainTextToken, 'expires_at' => $token->accessToken->expires_at, 'user' => $this->profile($user)]);
@@ -178,7 +179,8 @@ class AuthController extends Controller
             'password' => ['required', 'confirmed', PasswordRule::defaults(), 'different:current_password'],
         ]);
         $user = $request->user();
-        $user->update(['password' => $data['password']]);
+        $user->forceFill(['password' => $data['password'], 'must_change_password' => false, 'password_changed_at' => now()])->save();
+        Audit::log('auth.password_changed', $user);
         // Sign out other devices.
         $user->tokens()->when($user->currentAccessToken() instanceof PersonalAccessToken,
             fn ($q) => $q->where('id', '!=', $user->currentAccessToken()->id))->delete();
@@ -187,6 +189,31 @@ class AuthController extends Controller
         }
 
         return $this->ok(null, 'Password changed.');
+    }
+
+    /** Where I'm signed in: this browser, my phones. */
+    public function sessions(Request $request): JsonResponse
+    {
+        $current = $request->user()->currentAccessToken();
+
+        return $this->ok(Sessions::list($request->user(), $current instanceof PersonalAccessToken ? $current->id : null));
+    }
+
+    public function revokeSession(Request $request, int $id): JsonResponse
+    {
+        $request->user()->tokens()->whereKey($id)->firstOrFail()->delete();
+        Audit::log('auth.session_revoked', $request->user(), ['session' => $id]);
+
+        return $this->ok(null, 'Signed out of that device.');
+    }
+
+    public function signOutOthers(Request $request): JsonResponse
+    {
+        $current = $request->user()->currentAccessToken();
+        $count = Sessions::revokeAll($request->user(), $current instanceof PersonalAccessToken ? $current->id : -1);
+        Audit::log('auth.signed_out_others', $request->user(), ['sessions' => $count]);
+
+        return $this->ok(['signed_out' => $count], $count ? "Signed out of {$count} other device(s)." : 'No other devices were signed in.');
     }
 
     public function forgotPassword(Request $request): JsonResponse
@@ -209,7 +236,7 @@ class AuthController extends Controller
         $status = Password::broker()->reset(
             ['email' => strtolower($data['email'])] + $data,
             function (User $user, string $password) {
-                $user->forceFill(['password' => $password, 'status' => $user->status === 'invited' ? 'active' : $user->status])->save();
+                $user->forceFill(['password' => $password, 'must_change_password' => false, 'password_changed_at' => now(), 'status' => $user->status === 'invited' ? 'active' : $user->status])->save();
                 $user->tokens()->delete();
             }
         );
@@ -347,7 +374,7 @@ class AuthController extends Controller
             $request->session()->regenerate(); // prevents session fixation
         }
 
-        $token = $user->createToken('web', ['*'], now()->addDays(self::WEB_TOKEN_DAYS));
+        $token = Sessions::issue($user, 'web', ['*'], now()->addDays(self::WEB_TOKEN_DAYS), 'web', $request);
 
         return ['token' => $token->plainTextToken, 'user' => $this->profile($user)];
     }
@@ -449,6 +476,7 @@ class AuthController extends Controller
             'punch_status' => $user->punch_status,
             'punched_at' => $user->punched_at,
             'two_factor_enabled' => $user->hasTwoFactor(),
+            'must_change_password' => $user->mustChangePassword(),
             'abilities' => $user->abilities(),
             'impersonating' => Impersonation::id() !== null,
             'tenant' => $tenant ? [
