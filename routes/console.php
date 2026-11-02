@@ -45,7 +45,7 @@ Schedule::call(function (NotificationService $notifications, TenantContext $cont
                 return;
             }
             $parts = array_filter([$overdue ? "{$overdue} overdue" : null, $unassigned ? "{$unassigned} unassigned" : null]);
-            $notifications->notifyRoles(['admin', 'coordinator'], 'jobs_attention', 'Jobs needing attention', 'Today: '.implode(', ', $parts).' job(s).', ['screen' => 'jobs']);
+            $notifications->notifyRoles(['admin', 'coordinator', 'head_engineer', 'service_tracker'], 'jobs_attention', 'Jobs needing attention', 'Today: '.implode(', ', $parts).' job(s).', ['screen' => 'jobs']);
         });
     });
 })->name('jobs-attention')->dailyAt('09:30')->timezone('Asia/Kolkata')->withoutOverlapping();

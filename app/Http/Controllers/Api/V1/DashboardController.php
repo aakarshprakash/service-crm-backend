@@ -14,9 +14,11 @@ use App\Models\Review;
 use App\Models\ServiceJob;
 use App\Models\User;
 use App\Services\CashCloseService;
+use App\Services\Reports\LocationAnalysis;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
 
 class DashboardController extends Controller
@@ -29,6 +31,16 @@ class DashboardController extends Controller
         $key = "dashboard:{$tenant->id}:".($branchId ?? 'all');
 
         $data = Cache::remember($key, 60, fn () => $this->build($tenant->timezone, $branchId));
+        // Roles without billing access (HR, stores) see operations only, not money.
+        if (! $request->user()->can('invoices.view')) {
+            unset($data['revenue']);
+            $data['technicians']['performance'] = collect($data['technicians']['performance'])->map(fn ($r) => array_merge($r, ['revenue' => null]));
+        }
+        // Customer names in today's list are for people who work with jobs.
+        if (! $request->user()->can('jobs.view')) {
+            $data['today']['visits'] = [];
+            unset($data['locations']);
+        }
 
         return $this->ok($data);
     }
@@ -47,8 +59,8 @@ class DashboardController extends Controller
                 ->orWhere('scheduled_at', '<', now($tz)->startOfDay()->utc()))
             ->with([
                 'customer:id,name,phone,address,city,pincode', 'complaintType:id,name', 'serviceLocation:id,name',
-                'customerProduct:id,product_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
-                'customerProduct.product.brand:id,name',
+                'customerProduct:id,product_id,model_no,brand_id,category_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
+                'customerProduct.product.brand:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name',
             ])
             ->orderBy('scheduled_at')->limit(20)->get()
             ->each(fn (ServiceJob $j) => $j->customerProduct?->setAttribute('under_warranty', $j->customerProduct->isUnderWarranty()));
@@ -58,6 +70,8 @@ class DashboardController extends Controller
                 'open' => (int) ($counts['open'] ?? 0),
                 'in_progress' => (int) ($counts['in_progress'] ?? 0),
                 'pending' => (int) ($counts['pending'] ?? 0),
+                'part_pending' => (int) ($counts['part_pending'] ?? 0),
+                'cancel_requested' => (int) ($counts['cancel_requested'] ?? 0),
                 'completed' => (int) ($counts['completed'] ?? 0),
             ],
             'today' => $today,
@@ -138,9 +152,37 @@ class DashboardController extends Controller
 
         $technicians = User::inTenant()->technicians()->where('status', 'active')->when($branchId, fn ($q) => $q->where('branch_id', $branchId));
 
+        // Today's visits, in time order: what the office watches through the day.
+        $today = $jobs()->whereBetween('scheduled_at', [$todayStart, $todayEnd])
+            ->with(['customer:id,name,phone,city', 'technician:id,name', 'complaintType:id,name', 'customerProduct:id,brand_id,product_id,model_no', 'customerProduct.brand:id,name'])
+            ->orderBy('scheduled_at')->limit(10)
+            ->get(['id', 'crm_call_id', 'status', 'priority', 'scheduled_at', 'customer_id', 'assigned_technician_id', 'complaint_type_id', 'customer_product_id'])
+            ->map(fn (ServiceJob $j) => [
+                'id' => $j->id,
+                'crm_call_id' => $j->crm_call_id,
+                'status' => $j->status->value,
+                'priority' => $j->priority,
+                'scheduled_at' => $j->scheduled_at?->toIso8601String(),
+                'customer' => $j->customer?->name,
+                'city' => $j->customer?->city,
+                'technician' => $j->technician?->name,
+                'service_type' => $j->complaintType?->name,
+                'brand' => $j->customerProduct?->brand?->name,
+            ]);
+
+        // The preview of the Service locations page: what each location has in hand, this month.
+        $locations = collect(app(LocationAnalysis::class)->report($tz, $branchId, $monthStart, $todayEnd)['locations'])
+            ->map(fn ($l) => Arr::only($l, ['id', 'name', 'city', 'active', 'unassigned', 'overdue', 'aged', 'linked_technicians', 'on_duty']))->all();
+
         return [
+            'locations' => $locations,
+            'today' => [
+                'visits' => $today,
+                'completed' => $jobs()->where('status', 'completed')->whereBetween('completed_at', [$todayStart, $todayEnd])->count(),
+                'logged' => $jobs()->whereBetween('created_at', [$todayStart, $todayEnd])->count(),
+            ],
             'jobs' => [
-                'by_status' => collect(['open', 'in_progress', 'pending', 'completed', 'cancelled'])->mapWithKeys(fn ($s) => [$s => (int) ($status[$s] ?? 0)]),
+                'by_status' => collect(['open', 'in_progress', 'pending', 'part_pending', 'cancel_requested', 'completed', 'cancelled'])->mapWithKeys(fn ($s) => [$s => (int) ($status[$s] ?? 0)]),
                 'unassigned' => $jobs()->whereIn('status', ['open', 'pending'])->whereNull('assigned_technician_id')->count(),
                 'scheduled_today' => $jobs()->whereBetween('scheduled_at', [$todayStart, $todayEnd])->count(),
                 'overdue' => $jobs()->whereIn('status', ['open', 'pending'])->where('scheduled_at', '<', $todayStart)->count(),
@@ -148,6 +190,7 @@ class DashboardController extends Controller
                 'trend' => $trend,
             ],
             'revenue' => [
+                'collected_today' => (int) (clone $payments)->where('paid_at', '>=', $todayStart)->sum('amount'),
                 'collected_this_month' => (int) (clone $payments)->sum('amount'),
                 'by_method' => $byMethod->map(fn ($v) => (int) $v),
                 'outstanding' => (int) (clone $invoices)->sum('balance_amount'),

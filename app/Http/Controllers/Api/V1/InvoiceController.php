@@ -54,6 +54,14 @@ class InvoiceController extends Controller
         ]);
     }
 
+    public function changeBillType(Request $request, int $id, InvoiceService $invoices): JsonResponse
+    {
+        $data = $request->validate(['is_gst' => ['required', 'boolean']]);
+        $invoice = $invoices->changeBillType(Invoice::findOrFail($id), $data['is_gst']);
+
+        return $this->ok($invoice, $data['is_gst'] ? 'Changed to a GST bill.' : 'Changed to a non-GST bill.');
+    }
+
     public function show(Request $request, int $id): JsonResponse
     {
         $invoice = $this->scoped($request)->with([

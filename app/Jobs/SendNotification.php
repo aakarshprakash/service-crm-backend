@@ -33,6 +33,7 @@ class SendNotification implements ShouldQueue
             $result = $messaging->channel($log->channel)->send((string) $log->recipient, $log->message, [
                 'title' => $log->title,
                 'data' => $log->data ?? [],
+                'tenant_id' => $log->tenant_id, // email: send from the company's own mail account
                 // Which phone app the push token belongs to (each may use its own Firebase project).
                 'app' => $log->channel === 'push' ? DeviceToken::where('token', $log->recipient)->value('app') : null,
             ]);

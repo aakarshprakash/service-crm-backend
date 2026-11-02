@@ -45,6 +45,8 @@ class ReportController extends Controller
         $truncated = count($result->rows) > self::SCREEN_LIMIT;
         if ($truncated) {
             $result->rows = array_slice($result->rows, 0, self::SCREEN_LIMIT);
+            // Totals must cover the whole period, not just the rows shown on screen.
+            $result->summary = $this->reports->run($report, $filters, app(TenantContext::class)->tenant())->summary;
         }
 
         return $this->ok($result->toArray() + ['truncated' => $truncated]);

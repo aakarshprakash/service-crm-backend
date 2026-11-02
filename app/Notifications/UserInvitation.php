@@ -2,6 +2,8 @@
 
 namespace App\Notifications;
 
+use App\Models\Tenant;
+use App\Services\TenantMailer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -26,7 +28,15 @@ class UserInvitation extends Notification implements ShouldQueue
             'invite' => 1,
         ]);
 
+        // Send through the company's own SMTP account when it has one, else the platform mailer.
+        $tenant = Tenant::find($notifiable->tenant_id);
+        $mailer = app(TenantMailer::class);
+        $own = $tenant ? $mailer->mailerFor($tenant) : null;
+        $from = $own ? $mailer->sender($tenant) : null;
+
         return (new MailMessage)
+            ->mailer($own)
+            ->when($from, fn (MailMessage $m) => $m->from($from['from_address'], $from['from_name']))
             ->subject("You're invited to {$this->companyName}")
             ->greeting("Hello {$notifiable->name},")
             ->line("You have been added to {$this->companyName} as {$this->roleLabel}.")

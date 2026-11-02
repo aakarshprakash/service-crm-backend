@@ -59,7 +59,7 @@ class LeaveService
                 'half_day' => $half, 'days' => $days, 'reason' => $data['reason'] ?? null, 'status' => 'pending',
             ]);
 
-            DB::afterCommit(fn () => $this->notifications->notifyRoles(['admin', 'coordinator'], 'leave_requested', 'Leave request',
+            DB::afterCommit(fn () => $this->notifications->notifyRoles(['admin', 'coordinator', 'head_engineer', 'hr_executive'], 'leave_requested', 'Leave request',
                 "{$user->name} asked for {$this->fmt($days)} day(s) of {$type->name} from ".CarbonImmutable::parse($data['from_date'])->format('d M').'.',
                 ['leave_request_id' => $request->id]));
 

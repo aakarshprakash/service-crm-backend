@@ -11,7 +11,7 @@ class InventoryItem extends Model
 {
     use Auditable, BelongsToTenant;
 
-    protected $fillable = ['code', 'name', 'type', 'category', 'unit_of_measure', 'unit_price', 'reorder_level', 'is_active'];
+    protected $fillable = ['code', 'name', 'type', 'category', 'hsn_code', 'gst_rate', 'unit_of_measure', 'unit_price', 'reorder_level', 'is_active'];
 
     protected function casts(): array
     {

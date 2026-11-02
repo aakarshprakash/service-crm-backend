@@ -9,10 +9,16 @@ use App\Models\JobVisit;
 use App\Models\ServiceJob;
 use App\Models\User;
 use App\Services\JobService;
+use App\Services\Reports\LocationAnalysis;
+use App\Support\Money;
+use App\Support\QrCode;
 use App\Support\TenantContext;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -25,8 +31,8 @@ class JobController extends Controller
         $query = $this->filtered($request)
             ->with([
                 'customer:id,name,phone,address,city,pincode', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
-                'complaintType:id,name', 'customerProduct:id,product_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
-                'customerProduct.product.brand:id,name',
+                'complaintType:id,name', 'customerProduct:id,product_id,model_no,brand_id,category_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
+                'customerProduct.product.brand:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name',
             ]);
 
         $sort = $request->string('sort')->toString();
@@ -51,6 +57,37 @@ class JobController extends Controller
             ->selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status');
 
         return $this->ok(collect(JobStatus::cases())->mapWithKeys(fn ($s) => [$s->value => (int) ($counts[$s->value] ?? 0)]));
+    }
+
+    /** How many jobs each one-click filter would show, within the other filters in use. */
+    public function quickCounts(Request $request): JsonResponse
+    {
+        $tz = app(TenantContext::class)->tenant()->timezone;
+
+        return $this->ok(collect(['unassigned', 'overdue', 'today', 'high', 'aged', 'no_location'])->mapWithKeys(
+            fn ($name) => [$name => $this->filtered($request, ignoreStatus: true, ignoreQuick: true)->quick($name, $tz)->count()]
+        ));
+    }
+
+    /** Service-location allocation and analysis for a period (default: this month). */
+    public function locationAnalysis(Request $request, LocationAnalysis $analysis): JsonResponse
+    {
+        abort_if($request->user()->isTechnician(), 403);
+        $request->validate([
+            'from' => ['nullable', 'date'],
+            'to' => ['nullable', 'date', 'after_or_equal:from'],
+            'branch_id' => ['nullable', 'integer'],
+        ]);
+        $tz = app(TenantContext::class)->tenant()->timezone;
+        $from = $request->filled('from') ? $request->date('from', null, $tz)->startOfDay() : now($tz)->startOfMonth();
+        $to = ($request->filled('to') ? $request->date('to', null, $tz) : now($tz))->endOfDay();
+
+        $branchId = $request->integer('branch_id') ?: null;
+        $from->utc();
+        $to->utc();
+
+        return $this->ok($analysis->report($tz, $branchId, $from, $to, $request->user()->can('invoices.view'))
+            + ['aged_days' => ServiceJob::agedDays(), 'trend' => $analysis->trend($tz, $branchId, $from, $to)]);
     }
 
     /** Calendar view: jobs scheduled within a date range. */
@@ -95,13 +132,42 @@ class JobController extends Controller
         return $this->ok($job->fresh()->load(['customer:id,name,phone', 'technician:id,name', 'serviceLocation:id,name']), $message, 201, $meta);
     }
 
+    /** Printable job card (A4 PDF): what to do, for whom, on which unit – with space for work done and signatures. */
+    public function jobCard(Request $request, int $id): Response
+    {
+        $job = ServiceJob::with([
+            'customer', 'branch:id,name', 'serviceLocation:id,name', 'complaintType:id,name', 'complaintSummary:id,name',
+            'customerProduct.product.brand:id,name', 'customerProduct.product.category:id,name', 'customerProduct.dealer:id,name',
+            'customerProduct.brand:id,name', 'customerProduct.category:id,name',
+            'technician:id,name,phone', 'creator:id,name', 'visits.technician:id,name', 'visits.actionTaken:id,name',
+            'visits.inventoryUsage.item:id,code,name,unit_of_measure', 'invoice:id,job_id,invoice_number,total_amount,paid_amount,balance_amount',
+        ])->findOrFail($id);
+        $this->authorizeView($request->user(), $job);
+
+        $tenant = app(TenantContext::class)->tenant();
+        $logo = $tenant->logo_path && Storage::disk('private')->exists($tenant->logo_path)
+            ? 'data:image/png;base64,'.base64_encode(Storage::disk('private')->get($tenant->logo_path)) : null;
+
+        // Scan to track: opens the company's customer portal.
+        $trackUrl = rtrim((string) config('app.frontend_url'), '/').'/portal/'.$tenant->slug;
+
+        return Pdf::loadView('pdf.job-card', [
+            'job' => $job,
+            'tenant' => $tenant,
+            'logo' => $logo,
+            'qr' => QrCode::pngDataUri($trackUrl, 3),
+            'tz' => $tenant->timezone,
+            'money' => fn (int $v) => Money::format($v, $tenant->currency),
+        ])->setPaper('a4')->stream("JobCard-{$job->crm_call_id}.pdf");
+    }
+
     /** FR-5.3 full job context. */
     public function show(Request $request, int $id): JsonResponse
     {
         $job = ServiceJob::with([
             'customer', 'branch:id,name', 'serviceLocation:id,name', 'complaintType:id,name', 'complaintSummary:id,name',
-            'customerProduct.product.brand:id,name', 'customerProduct.product.category:id,name', 'customerProduct.dealer:id,name',
-            'technician:id,name,phone', 'creator:id,name',
+            'customerProduct.product.brand:id,name', 'customerProduct.product.category:id,name', 'customerProduct.dealer:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name',
+            'technician:id,name,phone', 'creator:id,name', 'cancelRequester:id,name',
             'visits.technician:id,name', 'visits.actionTaken:id,name', 'visits.assistedStaff:id,name',
             'visits.inventoryUsage.item:id,code,name,type,unit_of_measure',
             'images', 'voiceNotes.uploader:id,name', 'statusHistory.user:id,name',
@@ -122,7 +188,7 @@ class JobController extends Controller
     private function previousServices(ServiceJob $job): array
     {
         return JobVisit::query()
-            ->whereIn('status', ['completed', 'pending'])
+            ->whereIn('status', ['completed', 'pending', 'part_pending'])
             ->whereHas('job', fn ($q) => $q->whereKeyNot($job->id)->where('customer_id', $job->customer_id)
                 ->when($job->customer_product_id, fn ($q) => $q->where('customer_product_id', $job->customer_product_id)))
             ->with(['job:id,crm_call_id,complaint_type_id', 'job.complaintType:id,name', 'technician:id,name', 'actionTaken:id,name'])
@@ -193,10 +259,41 @@ class JobController extends Controller
 
     public function cancel(Request $request, int $id): JsonResponse
     {
-        $data = $request->validate(['reason' => ['required', 'string', 'max:300']]);
+        $data = $request->validate(['reason' => ['required', 'string', 'max:500']], ['reason.required' => 'Write the reason for cancelling.']);
         $job = $this->jobs->cancel(ServiceJob::findOrFail($id), $data['reason'], $request->user());
 
         return $this->ok($job, 'Job cancelled.');
+    }
+
+    public function approveCancel(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['reason' => ['required', 'string', 'max:500']], ['reason.required' => 'Write the reason for cancelling.']);
+        $job = $this->jobs->approveCancel(ServiceJob::findOrFail($id), $data['reason'], $request->user());
+
+        return $this->ok($job, 'Job cancelled.');
+    }
+
+    public function rejectCancel(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['note' => ['required', 'string', 'max:500']], ['note.required' => 'Tell the technician why the job stays open.']);
+        $job = $this->jobs->rejectCancel(ServiceJob::findOrFail($id), $data['note'], $request->user());
+
+        return $this->ok($job, 'Cancellation rejected. The job stays open.');
+    }
+
+    public function partPending(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['note' => ['required', 'string', 'max:500']], ['note.required' => 'Say which part the job is waiting for.']);
+        $job = $this->jobs->markPartPending(ServiceJob::findOrFail($id), $data['note'], $request->user());
+
+        return $this->ok($job, 'Job marked as part pending.');
+    }
+
+    public function partReceived(Request $request, int $id): JsonResponse
+    {
+        $job = $this->jobs->partReceived(ServiceJob::findOrFail($id), $request->user());
+
+        return $this->ok($job, 'Part received. The job is ready for a visit.');
     }
 
     /** FR-5.6 reminder / 2nd service call. */
@@ -214,7 +311,7 @@ class JobController extends Controller
         return $this->created($job, "Follow-up {$job->crm_call_id} created.");
     }
 
-    private function filtered(Request $request, bool $ignoreStatus = false): Builder
+    private function filtered(Request $request, bool $ignoreStatus = false, bool $ignoreQuick = false): Builder
     {
         $user = $request->user();
         $tz = app(TenantContext::class)->tenant()->timezone;
@@ -226,7 +323,10 @@ class JobController extends Controller
                 ? $q->whereNull('assigned_technician_id')
                 : $q->where('assigned_technician_id', $request->integer('technician_id')))
             ->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')))
-            ->when($request->filled('service_location_id'), fn ($q) => $q->where('service_location_id', $request->integer('service_location_id')))
+            ->when($request->filled('service_location_id'), fn ($q) => $request->input('service_location_id') === 'none'
+                ? $q->whereNull('service_location_id')
+                : $q->where('service_location_id', $request->integer('service_location_id')))
+            ->when($request->filled('call_type'), fn ($q) => $q->where('call_type', $request->string('call_type')))
             ->when($request->filled('priority'), fn ($q) => $q->where('priority', $request->string('priority')))
             ->when($request->filled('complaint_type_id'), fn ($q) => $q->where('complaint_type_id', $request->integer('complaint_type_id')))
             ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
@@ -235,6 +335,7 @@ class JobController extends Controller
             ->when($request->boolean('today'), fn ($q) => $q->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()]))
             // Same rule as the dashboard's "overdue" count: still open, visit date before today.
             ->when($request->boolean('overdue'), fn ($q) => $q->whereIn('status', ['open', 'pending'])->where('scheduled_at', '<', now($tz)->startOfDay()->utc()))
+            ->when(! $ignoreQuick && $request->filled('quick'), fn ($q) => $q->quick($request->string('quick')->toString(), $tz))
             ->search($request->string('search')->toString());
     }
 
@@ -257,7 +358,9 @@ class JobController extends Controller
             'branch_id' => ['nullable', 'integer', $exists('branches')],
             'complaint_type_id' => ['nullable', 'integer', $exists('complaint_types')],
             'complaint_summary_id' => ['nullable', 'integer', $exists('complaint_summaries')],
-            'complaint_details' => ['nullable', 'string', 'max:2000'],
+            'complaint_details' => ['nullable', 'string', 'max:10000'], // formatted HTML from the editor
+            'product_category' => ['nullable', 'string', 'max:100'],
+            'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],
             'priority' => ['required', Rule::in(['low', 'medium', 'high'])],
             'call_type' => ['required', Rule::in(['crm_call', 'walk_in', 'referral'])],
             'scheduled_at' => ['nullable', 'date'],

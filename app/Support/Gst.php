@@ -35,6 +35,7 @@ class Gst
                 'type' => $l['type'],
                 'description' => $l['description'],
                 'hsn' => $l['hsn'] ?: null,
+                'uom' => $l['uom'] ?? null,
                 'qty' => $qty,
                 'gross' => $gross,
                 'discount' => $shares[$i],

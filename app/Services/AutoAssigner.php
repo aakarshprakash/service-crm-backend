@@ -13,7 +13,7 @@ use App\Models\User;
  */
 class AutoAssigner
 {
-    public const ACTIVE_STATUSES = ['open', 'in_progress', 'pending'];
+    public const ACTIVE_STATUSES = ['open', 'in_progress', 'pending', 'part_pending', 'cancel_requested'];
 
     /**
      * @return array{technician: ?User, open_jobs: ?int, reason: ?string}

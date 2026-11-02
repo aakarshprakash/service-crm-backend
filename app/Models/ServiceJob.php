@@ -6,7 +6,10 @@ use App\Enums\JobStatus;
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
 use App\Models\Concerns\StoresUtc;
+use App\Services\AutoAssigner;
+use App\Support\RichText;
 use App\Support\TenantContext;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -23,7 +26,7 @@ class ServiceJob extends Model
 
     protected $fillable = [
         'crm_call_id', 'customer_id', 'customer_product_id', 'branch_id', 'service_location_id', 'complaint_type_id', 'complaint_summary_id',
-        'complaint_details', 'priority', 'call_type', 'status', 'service_type', 'scheduled_at', 'assigned_technician_id',
+        'complaint_details', 'product_category', 'customer_satisfaction_code', 'priority', 'call_type', 'status', 'service_type', 'scheduled_at', 'assigned_technician_id',
         'created_by', 'parent_job_id', 'completed_at', 'cancelled_at', 'cancel_reason',
     ];
 
@@ -37,9 +40,29 @@ class ServiceJob extends Model
         return [
             'status' => JobStatus::class,
             'scheduled_at' => 'datetime',
+            'part_pending_at' => 'datetime',
+            'cancel_requested_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Details may arrive as formatted HTML (web editor) or plain text (apps, portal). Formatted input is
+     * sanitised into complaint_details_html and complaint_details always holds the plain-text version.
+     */
+    public function setComplaintDetailsAttribute(?string $value): void
+    {
+        if ($value !== null && RichText::isHtml($value)) {
+            $html = RichText::clean($value);
+            $text = RichText::toText($html);
+            $this->attributes['complaint_details_html'] = $text === '' ? null : $html;
+            $this->attributes['complaint_details'] = $text === '' ? null : mb_substr($text, 0, 5000);
+
+            return;
+        }
+        $this->attributes['complaint_details_html'] = null;
+        $this->attributes['complaint_details'] = $value === null || trim($value) === '' ? null : $value;
     }
 
     /** FR-5.5: days since creation (frozen once the job is closed). */
@@ -61,6 +84,34 @@ class ServiceJob extends Model
         return (int) $this->created_at->copy()->timezone($tz)->startOfDay()->diffInDays($end->copy()->timezone($tz)->startOfDay());
     }
 
+    /** An unfinished job this many days old counts as an old job (Settings → Preferences). */
+    public static function agedDays(): int
+    {
+        return (int) (app(TenantContext::class)->tenant()?->setting('jobs.age_old') ?? 7);
+    }
+
+    /** Created before this moment means at least agedDays() calendar days old where the company is. */
+    public static function agedBefore(string $tz): CarbonInterface
+    {
+        return now($tz)->startOfDay()->subDays(self::agedDays() - 1)->utc();
+    }
+
+    /** The Jobs list's one-click filters. An unknown name filters nothing. */
+    public function scopeQuick(Builder $query, ?string $name, string $tz): Builder
+    {
+        $unfinished = AutoAssigner::ACTIVE_STATUSES;
+
+        return match ($name) {
+            'unassigned' => $query->whereNull('assigned_technician_id')->whereIn('status', ['open', 'pending']),
+            'overdue' => $query->whereIn('status', ['open', 'pending'])->where('scheduled_at', '<', now($tz)->startOfDay()->utc()),
+            'today' => $query->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()]),
+            'high' => $query->where('priority', 'high')->whereIn('status', $unfinished),
+            'aged' => $query->whereIn('status', $unfinished)->where('created_at', '<', self::agedBefore($tz)),
+            'no_location' => $query->whereNull('service_location_id')->whereIn('status', $unfinished),
+            default => $query,
+        };
+    }
+
     public function scopeSearch(Builder $query, ?string $term): Builder
     {
         if (! $term = trim((string) $term)) {
@@ -70,12 +121,15 @@ class ServiceJob extends Model
 
         return $query->where(function (Builder $q) use ($like, $term) {
             $q->where('crm_call_id', 'like', $like)
+                ->orWhere('product_category', 'like', $like)
+                ->orWhere('customer_satisfaction_code', 'like', $like)
                 ->orWhereHas('customer', fn ($c) => $c->where('phone', 'like', $like)
                     ->orWhere('alt_phone', 'like', $like)
                     ->orWhere('crm_id', $term)
                     ->orWhere('name', 'like', $like))
                 ->orWhereHas('customerProduct', fn ($p) => $p->where('serial_no', 'like', $like)
-                    ->orWhere('outdoor_serial_no', 'like', $like));
+                    ->orWhere('outdoor_serial_no', 'like', $like)
+                    ->orWhere('model_no', 'like', $like));
         });
     }
 
@@ -112,6 +166,11 @@ class ServiceJob extends Model
     public function technician(): BelongsTo
     {
         return $this->belongsTo(User::class, 'assigned_technician_id');
+    }
+
+    public function cancelRequester(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancel_requested_by');
     }
 
     public function creator(): BelongsTo

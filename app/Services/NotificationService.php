@@ -79,12 +79,28 @@ class NotificationService
         $this->sendToCustomer($tenant, $customer, $event, $vars, ['invoice_id' => $invoice->id]);
     }
 
+    /** Email subject per event (the body is the same text as the SMS template). */
+    public const EMAIL_SUBJECTS = [
+        'job_created' => 'Service request {call_id} registered',
+        'technician_assigned' => 'Technician assigned for {call_id}',
+        'job_completed' => 'Service {call_id} completed',
+        'payment_link' => 'Payment due for invoice {invoice_number}',
+        'payment_received' => 'Payment received – thank you',
+        'followup_reminder' => 'Follow-up service {call_id} scheduled',
+        'location_request' => 'Please share your location for {call_id}',
+    ];
+
     private function sendToCustomer(Tenant $tenant, Customer $customer, string $event, array $vars, array $data): void
     {
-        foreach (['sms', 'whatsapp'] as $channel) {
+        foreach (['sms', 'whatsapp', 'email'] as $channel) {
             if (! $tenant->channelEnabled($channel)) {
                 continue;
             }
+            $recipient = $channel === 'email' ? $customer->email : $customer->phone;
+            if (! $recipient) {
+                continue;
+            }
+            // Email reuses the SMS wording unless the company saved an email-specific template.
             $body = $this->render($tenant, $event, $channel, $vars);
             if ($body === null) {
                 continue;
@@ -93,11 +109,22 @@ class NotificationService
                 'customer_id' => $customer->id,
                 'type' => $event,
                 'channel' => $channel,
-                'recipient' => $customer->phone,
+                'recipient' => $recipient,
+                'title' => $channel === 'email' ? $this->subject($event, $vars, $tenant) : null,
                 'message' => $body,
                 'data' => $data,
             ]);
         }
+    }
+
+    private function subject(string $event, array $vars, Tenant $tenant): string
+    {
+        $subject = self::EMAIL_SUBJECTS[$event] ?? 'Update from {company}';
+        foreach ($vars as $key => $value) {
+            $subject = str_replace('{'.$key.'}', (string) $value, $subject);
+        }
+
+        return trim(preg_replace('/\{[a-z_]+\}/', '', $subject)).' – '.$tenant->name;
     }
 
     /** Staff in-app notification, plus FCM push for users with registered devices (FR-12.1). */
@@ -153,9 +180,11 @@ class NotificationService
 
     public function render(Tenant $tenant, string $event, string $channel, array $vars): ?string
     {
-        $template = NotificationTemplate::withoutGlobalScopes()
-            ->where(['tenant_id' => $tenant->id, 'event' => $event, 'channel' => $channel])
+        $find = fn (string $ch) => NotificationTemplate::withoutGlobalScopes()
+            ->where(['tenant_id' => $tenant->id, 'event' => $event, 'channel' => $ch])
             ->first();
+        // Email has no templates of its own: it uses the company's SMS wording.
+        $template = $find($channel === 'email' ? 'sms' : $channel);
 
         if ($template && ! $template->is_active) {
             return null;

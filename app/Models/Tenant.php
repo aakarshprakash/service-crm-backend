@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Casts\SafeEncryptedArray;
 use App\Models\Concerns\Auditable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,15 +15,22 @@ class Tenant extends Model
 
     protected $fillable = [
         'name', 'slug', 'status', 'timezone', 'currency', 'plan_id', 'email', 'phone', 'address',
-        'gstin', 'logo_path', 'settings', 'trial_ends_at',
+        'gstin', 'pan', 'state', 'logo_path', 'settings', 'trial_ends_at',
     ];
 
-    protected $hidden = ['gateway_credentials'];
+    protected $hidden = ['gateway_credentials', 'mail_credentials'];
 
     public const DEFAULT_SETTINGS = [
         'invoice_prefix' => 'INV',
         'job_prefix' => 'SC',
         'receipt_prefix' => 'RCPT',
+        // The rest of each number after its letters. Only job numbers may end in a random number:
+        // tax invoices must run in consecutive order, and receipts follow them.
+        'numbering' => [
+            'job' => ['date' => 'ym', 'ending' => 'counter', 'digits' => 5, 'separator' => 'dash'],
+            'invoice' => ['date' => 'ym', 'ending' => 'counter', 'digits' => 5, 'separator' => 'dash'],
+            'receipt' => ['date' => 'ym', 'ending' => 'counter', 'digits' => 5, 'separator' => 'dash'],
+        ],
         'notifications' => ['sms' => false, 'whatsapp' => false, 'push' => true, 'email' => false],
         'online_payments' => false,
         'strict_cash_close' => true,
@@ -32,16 +40,24 @@ class Tenant extends Model
         'auto_assign_on_duty_only' => false,
         // Customer sign-off: when on, a visit can only be completed after the customer signs.
         // require_punch_in: technicians must be punched in (on duty) to start a visit.
-        'jobs' => ['require_signature' => false, 'require_punch_in' => true],
+        // age_*: from how many days an unfinished job shows amber, orange ("old") and red in the Jobs list.
+        'jobs' => ['require_signature' => false, 'require_punch_in' => true, 'age_warning' => 3, 'age_old' => 7, 'age_critical' => 14],
         // Geo-fenced attendance: off | flag (record outside punches) | enforce (block them).
         'attendance' => ['geofence' => 'off', 'geofence_technicians' => false, 'require_location' => false],
+        // GST (applies once the company GSTIN is set). Prices are GST-inclusive; rates in %.
+        // job_bills / walkin_bills: whether a new bill starts as a GST or non-GST bill. Each bill can still be changed.
+        'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst'],
+        // Printed on invoices, for customers paying by bank transfer.
+        'bank' => ['account_name' => null, 'bank_name' => null, 'account_no' => null, 'ifsc' => null, 'branch' => null],
+        'invoice_template' => 'classic', // classic | modern
     ];
 
     protected function casts(): array
     {
         return [
             'settings' => 'array',
-            'gateway_credentials' => 'encrypted:array',
+            'gateway_credentials' => SafeEncryptedArray::class,
+            'mail_credentials' => SafeEncryptedArray::class,
             'trial_ends_at' => 'datetime',
         ];
     }
@@ -85,6 +101,10 @@ class Tenant extends Model
         }
         if ($channel === 'push') {
             return (bool) $this->setting('notifications.push', true);
+        }
+        // Email goes out through the company's own SMTP account, so it isn't a plan add-on.
+        if ($channel === 'email') {
+            return (bool) $this->setting('notifications.email', false);
         }
 
         return $this->feature($channel) && (bool) $this->setting("notifications.$channel", false);

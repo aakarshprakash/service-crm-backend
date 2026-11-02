@@ -6,6 +6,8 @@ use App\Enums\Role;
 use App\Http\Controllers\Controller;
 use App\Models\Branch;
 use App\Models\PunchLog;
+use App\Models\Review;
+use App\Models\ServiceJob;
 use App\Models\User;
 use App\Notifications\UserInvitation;
 use App\Support\Audit;
@@ -44,15 +46,36 @@ class UserController extends Controller
         $users = User::inTenant()->where('status', 'active')
             ->when($request->filled('role'), fn ($q) => $q->where('role', $request->string('role')))
             ->where('role', '!=', Role::Customer->value)
+            ->when($request->string('role')->toString() === Role::Technician->value, fn ($q) => $q->withCount([
+                'assignedJobs as open_jobs' => fn ($j) => $j->whereIn('status', ['open', 'pending', 'part_pending', 'cancel_requested', 'in_progress']),
+            ]))
             ->orderBy('name')
             ->get(['id', 'name', 'role', 'branch_id', 'punch_status', 'phone']);
 
         return $this->ok($users);
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
-        return $this->ok(User::inTenant()->with(['branch:id,name', 'serviceLocations:id,name'])->findOrFail($id));
+        $user = User::inTenant()->with(['branch:id,name', 'serviceLocations:id,name'])->findOrFail($id);
+        $stats = null;
+        if ($user->role === Role::Technician) {
+            $jobs = fn () => ServiceJob::where('assigned_technician_id', $user->id);
+            $monthStart = now(app(TenantContext::class)->tenant()->timezone)->startOfMonth()->utc();
+            $stats = [
+                'open_jobs' => $jobs()->whereIn('status', ['open', 'pending', 'part_pending', 'cancel_requested', 'in_progress'])->count(),
+                'completed_this_month' => $jobs()->where('status', 'completed')->where('completed_at', '>=', $monthStart)->count(),
+                'completed_total' => $jobs()->where('status', 'completed')->count(),
+                'rating' => ($avg = Review::where('technician_id', $user->id)->avg('rating')) !== null ? round((float) $avg, 1) : null,
+                'reviews' => Review::where('technician_id', $user->id)->count(),
+                'recent_jobs' => $request->user()->can('jobs.view')
+                    ? $jobs()->with(['customer:id,name', 'complaintType:id,name'])->latest('id')->limit(6)
+                        ->get(['id', 'crm_call_id', 'status', 'customer_id', 'complaint_type_id', 'scheduled_at', 'created_at'])
+                    : [],
+            ];
+        }
+
+        return $this->ok($user->toArray() + ['stats' => $stats]);
     }
 
     public function store(Request $request): JsonResponse

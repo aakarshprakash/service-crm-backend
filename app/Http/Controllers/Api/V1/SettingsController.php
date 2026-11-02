@@ -7,12 +7,20 @@ use App\Models\AuditLog;
 use App\Models\NotificationTemplate;
 use App\Models\SubscriptionPlan;
 use App\Services\NotificationService;
+use App\Services\InvoiceService;
+use App\Services\TenantMailer;
+use App\Models\Invoice;
+use App\Support\IndianStates;
+use Illuminate\Http\Response;
+use App\Support\DocumentNumber;
 use App\Support\TenantContext;
 use DateTimeZone;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Throwable;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SettingsController extends Controller
@@ -23,7 +31,9 @@ class SettingsController extends Controller
         $credentials = $tenant->gateway_credentials ?: [];
 
         return $this->ok([
-            'company' => $tenant->only(['name', 'slug', 'email', 'phone', 'address', 'gstin', 'timezone', 'currency', 'status', 'trial_ends_at']),
+            'company' => $tenant->only(['name', 'slug', 'email', 'phone', 'address', 'state', 'gstin', 'pan', 'timezone', 'currency', 'status', 'trial_ends_at']),
+            'states' => array_values(IndianStates::STATES),
+            'invoice_templates' => InvoiceService::TEMPLATES,
             'has_logo' => (bool) $tenant->logo_path,
             'settings' => $tenant->mergedSettings(),
             'plan' => $tenant->plan,
@@ -36,6 +46,7 @@ class SettingsController extends Controller
                 'platform_available' => (bool) config('services.razorpay.key_id'),
                 'webhook_url' => url("/api/v1/payments/webhook/razorpay/{$tenant->slug}"),
             ],
+            'email' => $this->emailPayload($tenant),
             'timezones' => DateTimeZone::listIdentifiers(),
         ]);
     }
@@ -48,7 +59,9 @@ class SettingsController extends Controller
             'email' => ['nullable', 'email', 'max:150'],
             'phone' => ['nullable', 'string', 'max:20'],
             'address' => ['nullable', 'string', 'max:500'],
-            'gstin' => ['nullable', 'string', 'max:20', 'regex:/^[0-9A-Z]{15}$/'],
+            'gstin' => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/'],
+            'pan' => ['nullable', 'string', 'regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/'],
+            'state' => ['nullable', Rule::in(array_values(IndianStates::STATES))],
             'timezone' => ['required', 'timezone:all'],
             'currency' => ['required', Rule::in(['INR', 'USD', 'EUR', 'GBP', 'AED'])],
         ]);
@@ -64,10 +77,18 @@ class SettingsController extends Controller
             'invoice_prefix' => ['sometimes', 'string', 'max:10', 'regex:/^[A-Z0-9]+$/'],
             'job_prefix' => ['sometimes', 'string', 'max:10', 'regex:/^[A-Z0-9]+$/'],
             'receipt_prefix' => ['sometimes', 'string', 'max:10', 'regex:/^[A-Z0-9]+$/'],
+            'numbering' => ['sometimes', 'array'],
+            'numbering.*.date' => ['sometimes', Rule::in(array_keys(DocumentNumber::DATE_FORMATS))],
+            'numbering.*.digits' => ['sometimes', 'integer', 'min:3', 'max:8'],
+            'numbering.*.separator' => ['sometimes', Rule::in(['dash', 'none'])],
+            'numbering.job.ending' => ['sometimes', Rule::in(['counter', 'random'])],
+            'numbering.invoice.ending' => ['sometimes', Rule::in(['counter'])],
+            'numbering.receipt.ending' => ['sometimes', Rule::in(['counter'])],
             'notifications' => ['sometimes', 'array'],
             'notifications.sms' => ['boolean'],
             'notifications.whatsapp' => ['boolean'],
             'notifications.push' => ['boolean'],
+            'notifications.email' => ['boolean'],
             'online_payments' => ['sometimes', 'boolean'],
             'strict_cash_close' => ['sometimes', 'boolean'],
             'customer_portal' => ['sometimes', 'boolean'],
@@ -77,12 +98,39 @@ class SettingsController extends Controller
             'jobs' => ['sometimes', 'array'],
             'jobs.require_signature' => ['sometimes', 'boolean'],
             'jobs.require_punch_in' => ['sometimes', 'boolean'],
+            'jobs.age_warning' => ['sometimes', 'integer', 'min:1', 'max:365'],
+            'jobs.age_old' => ['sometimes', 'integer', 'min:1', 'max:365'],
+            'jobs.age_critical' => ['sometimes', 'integer', 'min:1', 'max:365'],
             'attendance' => ['sometimes', 'array'],
             'attendance.geofence' => ['sometimes', Rule::in(['off', 'flag', 'enforce'])],
             'attendance.geofence_technicians' => ['sometimes', 'boolean'],
             'attendance.require_location' => ['sometimes', 'boolean'],
+            'gst' => ['sometimes', 'array'],
+            'gst.service_sac' => ['sometimes', 'string', 'regex:/^[0-9]{4,8}$/'],
+            'gst.service_rate' => ['sometimes', 'numeric', Rule::in([0, 5, 12, 18, 28])],
+            'gst.part_rate' => ['sometimes', 'numeric', Rule::in([0, 5, 12, 18, 28])],
+            'gst.job_bills' => ['sometimes', Rule::in(['gst', 'non_gst'])],
+            'gst.walkin_bills' => ['sometimes', Rule::in(['gst', 'non_gst'])],
+            'bank' => ['sometimes', 'array'],
+            'bank.account_name' => ['nullable', 'string', 'max:150'],
+            'bank.bank_name' => ['nullable', 'string', 'max:100'],
+            'bank.account_no' => ['nullable', 'string', 'max:40'],
+            'bank.ifsc' => ['nullable', 'string', 'max:20'],
+            'bank.branch' => ['nullable', 'string', 'max:100'],
+            'invoice_template' => ['sometimes', Rule::in(InvoiceService::TEMPLATES)],
         ]);
-        $tenant->update(['settings' => array_replace_recursive($tenant->mergedSettings(), $data)]);
+        $merged = array_replace_recursive($tenant->mergedSettings(), $data);
+        if ($merged['jobs']['age_warning'] >= $merged['jobs']['age_old']) {
+            throw ValidationException::withMessages(['jobs.age_old' => 'Orange must start later than amber.']);
+        }
+        if ($merged['jobs']['age_old'] >= $merged['jobs']['age_critical']) {
+            throw ValidationException::withMessages(['jobs.age_critical' => 'Red must start later than orange.']);
+        }
+        $invoiceLength = DocumentNumber::length($merged['invoice_prefix'], $merged['numbering']['invoice']);
+        if ($tenant->gstin && $invoiceLength > DocumentNumber::GST_INVOICE_MAX_LENGTH) {
+            throw ValidationException::withMessages(['numbering.invoice' => "GST invoice numbers can be at most ".DocumentNumber::GST_INVOICE_MAX_LENGTH." characters. This format makes {$invoiceLength}."]);
+        }
+        $tenant->update(['settings' => $merged]);
 
         return $this->ok($tenant->mergedSettings(), 'Settings saved.');
     }
@@ -107,6 +155,94 @@ class SettingsController extends Controller
         $tenant->save();
 
         return $this->ok(null, ($data['remove'] ?? false) ? 'Gateway credentials removed.' : 'Gateway credentials saved.');
+    }
+
+    /** Company's own SMTP account (or the platform mailer when none is saved). The password is never returned. */
+    private function emailPayload($tenant): array
+    {
+        $c = $tenant->mail_credentials ?: [];
+        $platform = ! in_array(config('mail.default'), ['log', 'array'], true);
+
+        return [
+            'own_account' => ! empty($c['host']),
+            'host' => $c['host'] ?? '',
+            'port' => $c['port'] ?? 465,
+            'encryption' => $c['encryption'] ?? 'ssl',
+            'username' => $c['username'] ?? '',
+            'from_address' => $c['from_address'] ?? '',
+            'from_name' => $c['from_name'] ?? '',
+            'has_password' => ! empty($c['password']),
+            'platform_available' => $platform,
+            'platform_from' => $platform ? config('mail.from.address') : null,
+        ];
+    }
+
+    public function updateEmail(Request $request): JsonResponse
+    {
+        $tenant = app(TenantContext::class)->tenant();
+        $data = $request->validate([
+            'remove' => ['sometimes', 'boolean'],
+            'host' => ['required_unless:remove,true', 'nullable', 'string', 'max:190', 'regex:/^[A-Za-z0-9.\-]+$/'],
+            'port' => ['required_unless:remove,true', 'nullable', 'integer', 'between:1,65535'],
+            'encryption' => ['required_unless:remove,true', 'nullable', Rule::in(['ssl', 'tls', 'none'])],
+            'username' => ['nullable', 'string', 'max:190'],
+            'password' => ['nullable', 'string', 'max:200'],
+            'from_address' => ['required_unless:remove,true', 'nullable', 'email', 'max:190'],
+            'from_name' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        if ($data['remove'] ?? false) {
+            $tenant->mail_credentials = null;
+            $tenant->save();
+
+            return $this->ok($this->emailPayload($tenant), 'Email settings removed. The platform mail account will be used.');
+        }
+
+        $existing = $tenant->mail_credentials ?: [];
+        $keepPassword = ($existing['username'] ?? null) === ($data['username'] ?? null) ? ($existing['password'] ?? null) : null;
+        $tenant->mail_credentials = array_filter([
+            'host' => strtolower($data['host']),
+            'port' => (int) $data['port'],
+            'encryption' => $data['encryption'],
+            'username' => $data['username'] ?? null,
+            // Write-only: a blank password keeps the saved one (unless the username changed).
+            'password' => ($data['password'] ?? '') !== '' ? $data['password'] : $keepPassword,
+            'from_address' => $data['from_address'],
+            'from_name' => $data['from_name'] ?? null,
+        ], fn ($v) => $v !== null && $v !== '');
+        $tenant->save();
+
+        return $this->ok($this->emailPayload($tenant), 'Email settings saved.');
+    }
+
+    /** Send a real test message with the saved settings so the admin can confirm delivery. */
+    public function testEmail(Request $request, TenantMailer $mailer): JsonResponse
+    {
+        $data = $request->validate(['to' => ['required', 'email', 'max:190']]);
+        $tenant = app(TenantContext::class)->tenant();
+
+        try {
+            $via = $mailer->sendTest($tenant, $data['to']);
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'message' => 'The test email could not be sent: '.mb_substr(strtok($e->getMessage(), "\n"), 0, 300),
+                'errors' => ['to' => ['Sending failed – check the host, port, encryption, username and password.']],
+            ], 422);
+        }
+
+        return $this->ok(null, "Test email sent to {$data['to']} using {$via}.");
+    }
+
+    /** Latest invoice rendered in the chosen design, so the admin can compare before switching. */
+    public function invoicePreview(Request $request, InvoiceService $invoices): Response
+    {
+        $template = $request->validate(['template' => ['required', Rule::in(InvoiceService::TEMPLATES)]])['template'];
+        $invoice = Invoice::latest('id')->first();
+        abort_unless($invoice, 404, 'Create an invoice first to preview the designs.');
+
+        return $invoices->pdf($invoice, $template)->stream("preview-{$template}.pdf");
     }
 
     public function uploadLogo(Request $request): JsonResponse

@@ -164,7 +164,7 @@ class InventoryService
         if ($delta < 0 && $item->reorder_level > 0 && $balance <= $item->reorder_level && ! $stock->low_stock_alerted_at) {
             $stock->forceFill(['low_stock_alerted_at' => now()])->save();
             $branch = $stock->branch()->value('name');
-            DB::afterCommit(fn () => $this->notifications->notifyRoles(['admin', 'accountant'], 'low_stock', 'Low stock alert',
+            DB::afterCommit(fn () => $this->notifications->notifyRoles(['admin', 'accountant', 'store_keeper'], 'low_stock', 'Low stock alert',
                 "{$item->name} ({$item->code}) at {$branch} is down to {$balance} {$item->unit_of_measure} (reorder level {$item->reorder_level}).",
                 ['item_id' => $item->id, 'branch_id' => $stock->branch_id]));
         }

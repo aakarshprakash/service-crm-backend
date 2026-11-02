@@ -42,7 +42,7 @@ class VisitService
             if ($job->assigned_technician_id !== $technician->id) {
                 throw ValidationException::withMessages(['job' => 'This job is not assigned to you.']);
             }
-            if (! in_array($job->status, [JobStatus::Open, JobStatus::Pending], true)) {
+            if (! in_array($job->status, [JobStatus::Open, JobStatus::Pending, JobStatus::PartPending], true)) {
                 throw ValidationException::withMessages(['job' => $job->status === JobStatus::InProgress
                     ? 'A visit is already in progress for this job.'
                     : 'This job is '.$job->status->value.'.']);
@@ -98,7 +98,7 @@ class VisitService
         if ($job->assigned_technician_id !== $technician->id) {
             throw ValidationException::withMessages(['job' => 'This job is not assigned to you.']);
         }
-        if (! in_array($job->status, [JobStatus::Open, JobStatus::Pending], true)) {
+        if (! in_array($job->status, [JobStatus::Open, JobStatus::Pending, JobStatus::PartPending], true)) {
             throw ValidationException::withMessages(['job' => 'Only open or pending jobs can be updated before a visit.']);
         }
 
@@ -107,13 +107,13 @@ class VisitService
 
     private function applyCallDetails(ServiceJob $job, array $data): ServiceJob
     {
-        $job->fill(array_intersect_key($data, array_flip(['complaint_details', 'complaint_type_id', 'complaint_summary_id', 'priority', 'call_type'])))->save();
+        $job->fill(array_intersect_key($data, array_flip(['complaint_details', 'complaint_type_id', 'complaint_summary_id', 'priority', 'call_type', 'customer_satisfaction_code'])))->save();
 
         $customerFields = array_intersect_key($data, array_flip(['address', 'city', 'pincode', 'alt_phone']));
         if ($customerFields) {
             $job->customer->fill($customerFields)->save();
         }
-        $productFields = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no']));
+        $productFields = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no', 'model_no']));
         if ($productFields && $job->customerProduct) {
             $job->customerProduct->fill($productFields)->save();
         }
@@ -295,10 +295,20 @@ class VisitService
                 'end_lng' => $data['lng'] ?? null,
             ])->save();
 
-            $jobStatus = JobStatus::from($status === 'cancelled' ? 'cancelled' : $status);
-            $this->jobs->transition($job, $jobStatus, $technician->id, 'Visit closed as '.$status.($visit->actionTaken ? ' – '.$visit->actionTaken->name : ''));
-            if ($jobStatus === JobStatus::Cancelled) {
-                $job->update(['cancel_reason' => $data['service_summary'] ?? 'Cancelled at visit']);
+            // The customer usually gives this code once the work is done.
+            if (! empty($data['customer_satisfaction_code'])) {
+                $job->customer_satisfaction_code = $data['customer_satisfaction_code'];
+            }
+
+            $jobStatus = $status === 'cancelled' ? JobStatus::CancelRequested : JobStatus::from($status);
+            if ($jobStatus === JobStatus::PartPending) {
+                // What the technician wrote is what the office needs to order.
+                $job->part_pending_note = mb_substr((string) $visit->service_summary, 0, 500);
+            }
+            if ($jobStatus === JobStatus::CancelRequested) {
+                $this->jobs->requestCancel($job, (string) $visit->service_summary, $technician->id);
+            } else {
+                $this->jobs->transition($job, $jobStatus, $technician->id, 'Visit closed as '.str_replace('_', ' ', $status).($visit->actionTaken ? ' – '.$visit->actionTaken->name : ''));
             }
 
             $invoice = $this->invoices->syncForJob($job);

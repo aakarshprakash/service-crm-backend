@@ -8,7 +8,7 @@ use App\Models\JobStatusHistory;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\User;
-use App\Support\Sequence;
+use App\Support\DocumentNumber;
 use App\Support\TenantContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -28,7 +28,7 @@ class JobService
             $job = new ServiceJob($data);
             $job->crm_call_id = ! empty($data['crm_call_id'])
                 ? $data['crm_call_id']
-                : Sequence::formatted($tenant->id, 'job', $tenant->setting('job_prefix', 'SC'));
+                : DocumentNumber::next($tenant, 'job');
             $job->status = JobStatus::Open;
             $job->created_by = $creator?->id;
             if (empty($job->branch_id)) {
@@ -132,16 +132,102 @@ class JobService
             'branch_id' => $parent->branch_id,
             'complaint_type_id' => $parent->complaint_type_id,
             'complaint_summary_id' => $parent->complaint_summary_id,
+            'product_category' => $parent->product_category,
             'priority' => $parent->priority,
             'call_type' => $parent->call_type,
             'assigned_technician_id' => $parent->assigned_technician_id,
         ], array_filter($data, fn ($v) => $v !== null), ['parent_job_id' => $parent->id]), $by);
     }
 
+    /** A technician can't close a job as cancelled: it waits here, reason attached, until someone who may approve decides. */
+    public function requestCancel(ServiceJob $job, string $reason, int $technicianId): void
+    {
+        $job->cancel_reason = mb_substr($reason, 0, 500);
+        $job->cancel_requested_by = $technicianId;
+        $job->cancel_requested_at = now();
+        $this->transition($job, JobStatus::CancelRequested, $technicianId, "Cancellation requested: $reason");
+
+        $by = User::inTenant($job->tenant_id)->find($technicianId)?->name ?? 'A technician';
+        User::inTenant($job->tenant_id)->whereIn('role', config('permissions')['jobs.approve_cancel'])->where('status', 'active')->get()->each(
+            fn (User $approver) => $this->notifications->notifyUser($approver, 'job_cancel_requested', 'Cancellation needs your approval', "{$by} asked to cancel job {$job->crm_call_id}: {$job->cancel_reason}", ['job_id' => $job->id])
+        );
+    }
+
+    public function approveCancel(ServiceJob $job, string $reason, User $by): ServiceJob
+    {
+        $this->ensureAwaitingCancel($job);
+        $job->cancel_reason = $reason;
+        $this->transition($job, JobStatus::Cancelled, $by->id, "Cancellation approved: $reason");
+        $this->notifyCancelRequester($job, 'job_cancel_approved', 'Cancellation approved', "Job {$job->crm_call_id} has been cancelled.");
+
+        return $job;
+    }
+
+    /** Not cancelled after all: the job goes back to waiting for a visit, and the technician is told why. */
+    public function rejectCancel(ServiceJob $job, string $note, User $by): ServiceJob
+    {
+        $this->ensureAwaitingCancel($job);
+        $this->notifyCancelRequester($job, 'job_cancel_rejected', 'Cancellation not approved', "Job {$job->crm_call_id} stays open: {$note}");
+        $job->cancel_reason = null;
+        $job->cancel_requested_by = null;
+        $job->cancel_requested_at = null;
+        $this->transition($job, JobStatus::Pending, $by->id, "Cancellation rejected: $note");
+
+        return $job;
+    }
+
+    private function notifyCancelRequester(ServiceJob $job, string $type, string $title, string $message): void
+    {
+        if ($job->cancel_requested_by && $tech = User::inTenant($job->tenant_id)->find($job->cancel_requested_by)) {
+            $this->notifications->notifyUser($tech, $type, $title, $message, ['job_id' => $job->id]);
+        }
+    }
+
+    private function ensureAwaitingCancel(ServiceJob $job): void
+    {
+        if ($job->status !== JobStatus::CancelRequested) {
+            throw ValidationException::withMessages(['status' => 'This job is not waiting for a cancellation decision.']);
+        }
+    }
+
+    /** Parks the job until a part arrives. Saving again on a part-pending job just corrects the note. */
+    public function markPartPending(ServiceJob $job, string $note, User $by): ServiceJob
+    {
+        $this->ensureNotFinal($job);
+        if ($job->activeVisit()->exists()) {
+            throw ValidationException::withMessages(['status' => 'A visit is in progress. The technician marks the part as pending when closing it.']);
+        }
+        $job->part_pending_note = $note;
+        $this->transition($job, JobStatus::PartPending, $by->id, "Part pending: $note");
+
+        return $job;
+    }
+
+    /** The part has arrived: the job goes back to waiting for a visit and the technician is told. */
+    public function partReceived(ServiceJob $job, User $by): ServiceJob
+    {
+        if ($job->status !== JobStatus::PartPending) {
+            throw ValidationException::withMessages(['status' => 'This job is not waiting for a part.']);
+        }
+        $this->transition($job, $job->visits()->exists() ? JobStatus::Pending : JobStatus::Open, $by->id, 'Part received');
+
+        if ($job->assigned_technician_id && $tech = User::inTenant()->find($job->assigned_technician_id)) {
+            $this->notifications->notifyUser($tech, 'part_received', 'Part received', "The part for job {$job->crm_call_id} has arrived. The job is ready for a visit.", ['job_id' => $job->id]);
+        }
+
+        return $job;
+    }
+
     public function transition(ServiceJob $job, JobStatus $to, ?int $userId, ?string $remarks = null): void
     {
         if ($job->status !== $to && ! $job->status->canTransitionTo($to)) {
             throw ValidationException::withMessages(['status' => "Cannot move a job from {$job->status->value} to {$to->value}."]);
+        }
+        if ($to === JobStatus::PartPending) {
+            $job->part_pending_at ??= now();
+        } elseif ($job->status === JobStatus::PartPending) {
+            $job->part_pending_note = null;
+            $job->part_pending_at = null;
         }
         $job->status = $to;
         if ($to === JobStatus::Completed) {
@@ -189,6 +275,9 @@ class JobService
     {
         if ($job->status->isFinal()) {
             throw ValidationException::withMessages(['status' => 'This job is already '.$job->status->value.'.']);
+        }
+        if ($job->status === JobStatus::CancelRequested) {
+            throw ValidationException::withMessages(['status' => 'The technician asked to cancel this job. That must be approved or rejected first.']);
         }
     }
 }

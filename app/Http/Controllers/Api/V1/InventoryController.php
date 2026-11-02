@@ -212,6 +212,8 @@ class InventoryController extends Controller
             'name' => [$req, 'string', 'max:150'],
             'type' => [$req, Rule::in(['spare', 'consumable'])],
             'category' => ['nullable', 'string', 'max:100'],
+            'hsn_code' => ['nullable', 'string', 'regex:/^[0-9]{4,8}$/'],
+            'gst_rate' => ['nullable', 'numeric', Rule::in([0, 0.25, 3, 5, 12, 18, 28])],
             'unit_of_measure' => [$req, Rule::in(['nos', 'ml', 'ltr', 'gram', 'kg', 'metre'])],
             'unit_price' => [$req, 'integer', 'min:0', 'max:100000000'],
             'reorder_level' => ['nullable', 'numeric', 'min:0', 'decimal:0,3'],

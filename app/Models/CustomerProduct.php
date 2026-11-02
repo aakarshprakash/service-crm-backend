@@ -11,7 +11,32 @@ class CustomerProduct extends Model
 {
     use Auditable, BelongsToTenant;
 
-    protected $fillable = ['customer_id', 'product_id', 'serial_no', 'outdoor_serial_no', 'purchase_date', 'warranty_type', 'warranty_expiry', 'dealer_id'];
+    protected $fillable = ['customer_id', 'product_id', 'model_no', 'brand_id', 'category_id', 'serial_no', 'outdoor_serial_no', 'purchase_date', 'warranty_type', 'warranty_expiry', 'dealer_id'];
+
+    protected static function booted(): void
+    {
+        // Once the exact model is known, its brand and product type are authoritative.
+        static::saving(function (CustomerProduct $cp) {
+            if ($cp->product_id && $cp->isDirty('product_id') && ($model = Product::find($cp->product_id))) {
+                $cp->brand_id = $model->brand_id ?? $cp->brand_id;
+                $cp->category_id = $model->category_id ?? $cp->category_id;
+                $cp->model_no = $model->model_name;
+            } elseif ($cp->isDirty('model_no') && $cp->product_id) {
+                // Typed text now says what the model is, so the old master-list link no longer applies.
+                $cp->product_id = null;
+            }
+        });
+    }
+
+    public function brand(): BelongsTo
+    {
+        return $this->belongsTo(Brand::class);
+    }
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(ProductCategory::class, 'category_id');
+    }
 
     protected function casts(): array
     {

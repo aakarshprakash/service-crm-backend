@@ -48,14 +48,15 @@ class BooksController extends Controller
         $last = $this->books->summary($lastStart->toDateString(), $lastStart->endOfMonth()->toDateString(), $tenant->timezone);
         $receivables = $ledger->receivables();
         $withTechnicians = User::inTenant()->technicians()->where('status', 'active')->get()->sum(fn (User $t) => $cash->cashInHand($t));
-        $recent = array_slice(array_reverse($this->books->dayBook($now->subDays(30)->toDateString(), $now->toDateString(), $tenant->timezone, null, 500)), 0, 8);
+        // Newest 8 entries of the last 30 days (the whole window is read, so a busy month can't push them out).
+        $recent = array_slice(array_reverse($this->books->dayBook($now->subDays(30)->toDateString(), $now->toDateString(), $tenant->timezone)), 0, 8);
 
         return $this->ok([
             'month' => [
-                'income' => $month['income'], 'expense' => $month['expense'], 'net' => $month['net'],
+                'income' => $month['income'], 'gst' => $month['gst'], 'expense' => $month['expense'], 'net' => $month['net'],
                 'income_by_source' => $month['income_by_source'], 'expense_by_category' => $month['expense_by_category'],
             ],
-            'last_month' => ['income' => $last['income'], 'expense' => $last['expense'], 'net' => $last['net']],
+            'last_month' => ['income' => $last['income'], 'gst' => $last['gst'], 'expense' => $last['expense'], 'net' => $last['net']],
             'balances' => ['cash' => $ledger->balance($tenant, 'cash'), 'bank' => $ledger->balance($tenant, 'bank'), 'with_technicians' => (int) $withTechnicians],
             'receivables' => ['total' => $receivables['totals']['total'], 'customers' => $receivables['customers'], 'buckets' => $receivables['totals']],
             'pending_cash_closes' => CashClose::where('status', 'submitted')->count(),

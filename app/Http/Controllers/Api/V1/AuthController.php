@@ -115,7 +115,7 @@ class AuthController extends Controller
         }
 
         $user = $this->attempt($login, $data['password']);
-        if (! in_array($user->role, [Role::Technician, Role::Admin, Role::Coordinator, Role::Accountant], true)) {
+        if ($user->role !== Role::Technician && ! $user->role->isOffice()) {
             throw ValidationException::withMessages(['login' => 'This account cannot sign in to the mobile app.']);
         }
         if ($user->hasTwoFactor()) {

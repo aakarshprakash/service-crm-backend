@@ -9,7 +9,7 @@ use App\Models\Invoice;
 use App\Models\InvoiceItem;
 use App\Models\Tenant;
 use App\Models\User;
-use App\Support\Sequence;
+use App\Support\DocumentNumber;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -21,7 +21,7 @@ use Illuminate\Validation\ValidationException;
  */
 class WalkInBillService
 {
-    public function __construct(private InventoryService $inventory, private PaymentService $payments) {}
+    public function __construct(private InventoryService $inventory, private PaymentService $payments, private InvoiceService $invoices) {}
 
     /**
      * @param  array{customer_id?: int|null, customer?: array{name: string, phone: string}|null, branch_id?: int|null,
@@ -65,12 +65,18 @@ class WalkInBillService
                 throw ValidationException::withMessages(['branch_id' => 'Choose the branch the parts are sold from.']);
             }
 
+            $isGst = $data['is_gst'] ?? $this->invoices->startsAsGst($tenant, 'walkin_bills');
+            if ($isGst && ! $tenant->gstin) {
+                throw ValidationException::withMessages(['is_gst' => 'Add your GSTIN under Settings → Company to issue GST bills.']);
+            }
+
             $invoice = Invoice::create([
                 'job_id' => null,
                 'source' => 'walk_in',
                 'customer_id' => $customer->id,
                 'branch_id' => $branchId,
-                'invoice_number' => Sequence::formatted($tenant->id, 'invoice', $tenant->setting('invoice_prefix', 'INV')),
+                'invoice_number' => DocumentNumber::next($tenant, 'invoice'),
+                'is_gst' => $isGst,
                 'total_service_charge' => $service,
                 'total_spare_charge' => $parts,
                 'discount_amount' => $discount,
@@ -91,6 +97,7 @@ class WalkInBillService
                     $this->inventory->sellForInvoice($invoice->id, $l['item'], $branchId, $l['qty'], $by->id);
                 }
             }
+            $this->invoices->applyGst($invoice);
             $invoice->refreshPaymentTotals();
 
             // Same transaction: a rejected payment must not leave an unpaid duplicate bill behind.

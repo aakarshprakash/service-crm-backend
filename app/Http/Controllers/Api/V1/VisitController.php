@@ -91,6 +91,8 @@ class VisitController extends Controller
             'alt_phone' => ['nullable', 'string', 'regex:/^\+?[0-9]{10,15}$/'],
             'serial_no' => ['nullable', 'string', 'max:100'],
             'outdoor_serial_no' => ['nullable', 'string', 'max:100'],
+            'model_no' => ['nullable', 'string', 'max:150'],
+            'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],
         ];
     }
 
@@ -205,9 +207,10 @@ class VisitController extends Controller
     {
         $tenantId = app(TenantContext::class)->id();
         $data = $request->validate([
-            'status' => ['required', Rule::in(['pending', 'completed', 'cancelled'])],
+            'status' => ['required', Rule::in(['pending', 'part_pending', 'completed', 'cancelled'])],
             'action_taken_id' => ['nullable', 'integer', 'required_if:status,completed'],
             'service_summary' => ['required', 'string', 'max:2000'],
+            'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],
             'assisted_staff_id' => ['nullable', 'integer', Rule::exists('users', 'id')->where('tenant_id', $tenantId)],
             'labour_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'spare_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
@@ -218,7 +221,7 @@ class VisitController extends Controller
             'lng' => ['nullable', 'numeric', 'between:-180,180'],
         ], [
             'action_taken_id.required_if' => 'Select the action taken to mark the visit completed.',
-            'service_summary.required' => 'Enter a short service summary.',
+            'service_summary.required' => $request->input('status') === 'cancelled' ? 'Write why this job should be cancelled.' : 'Enter a short service summary.',
         ]);
 
         $result = $this->visits->complete($this->ownVisit($request, $id), $request->user(), $data);
@@ -226,7 +229,8 @@ class VisitController extends Controller
         return $this->ok($result, match ($data['status']) {
             'completed' => 'Visit completed.',
             'pending' => 'Visit saved as pending.',
-            default => 'Visit cancelled.',
+            'part_pending' => 'Visit saved as part pending.',
+            default => 'Visit closed. The office will review the cancellation.',
         });
     }
 

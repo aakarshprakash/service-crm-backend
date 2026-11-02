@@ -33,7 +33,7 @@ class PortalController extends Controller
 
         return $this->ok([
             'customer' => $customer->only(['id', 'name', 'phone', 'email', 'address', 'city', 'pincode']),
-            'open_jobs' => (clone $jobs)->whereIn('status', ['open', 'in_progress', 'pending'])->count(),
+            'open_jobs' => (clone $jobs)->whereIn('status', ['open', 'in_progress', 'pending', 'part_pending', 'cancel_requested'])->count(),
             'completed_jobs' => (clone $jobs)->where('status', 'completed')->count(),
             'outstanding' => (int) Invoice::where('customer_id', $customer->id)->sum('balance_amount'),
             'products' => CustomerProduct::where('customer_id', $customer->id)->with('product.brand:id,name')->get(),
@@ -44,7 +44,7 @@ class PortalController extends Controller
     public function jobs(Request $request): JsonResponse
     {
         $jobs = ServiceJob::where('customer_id', $request->user()->customer_id)
-            ->with(['technician:id,name', 'complaintType:id,name', 'customerProduct.product:id,model_name', 'review:id,job_id,rating'])
+            ->with(['technician:id,name', 'complaintType:id,name', 'customerProduct.product:id,model_name', 'customerProduct.brand:id,name', 'review:id,job_id,rating'])
             ->when($request->filled('status'), fn ($q) => $q->whereIn('status', explode(',', $request->string('status'))))
             ->latest('id')->paginate($this->perPage($request, 20));
 
@@ -60,14 +60,14 @@ class PortalController extends Controller
             ->findOrFail($id);
 
         $data = $this->publicJob($job) + [
-            'timeline' => $job->statusHistory->map(fn ($h) => ['status' => $h->status, 'at' => $h->changed_at, 'remarks' => $this->publicRemark($h->remarks)])->values(),
+            'timeline' => $job->statusHistory->map(fn ($h) => ['status' => $this->publicStatus($h->status), 'at' => $h->changed_at, 'remarks' => $this->publicRemark($h->remarks)])->values(),
             'visits' => $job->visits->map(fn ($v) => [
                 'date' => $v->visit_date, 'status' => $v->status, 'action_taken' => $v->actionTaken?->name,
                 'summary' => $v->service_summary, 'total_charge' => $v->total_charge,
             ]),
             'invoice' => $job->invoice?->only(['id', 'invoice_number', 'total_amount', 'paid_amount', 'balance_amount', 'payment_status', 'generated_at']),
             'review' => $job->review?->only(['rating', 'comment', 'created_at']),
-            'technician_phone' => in_array($job->status, [JobStatus::Open, JobStatus::InProgress, JobStatus::Pending], true) ? $job->technician?->phone : null,
+            'technician_phone' => in_array($job->status, [JobStatus::Open, JobStatus::InProgress, JobStatus::Pending, JobStatus::PartPending, JobStatus::CancelRequested], true) ? $job->technician?->phone : null,
         ];
 
         return $this->ok($data);
@@ -85,7 +85,7 @@ class PortalController extends Controller
             'preferred_date' => ['nullable', 'date', 'after_or_equal:'.now(app(TenantContext::class)->tenant()->timezone)->toDateString(), 'before:+60 days'],
         ]);
 
-        $open = ServiceJob::where('customer_id', $user->customer_id)->whereIn('status', ['open', 'in_progress', 'pending'])
+        $open = ServiceJob::where('customer_id', $user->customer_id)->whereIn('status', ['open', 'in_progress', 'pending', 'part_pending', 'cancel_requested'])
             ->when($data['customer_product_id'] ?? null, fn ($q, $p) => $q->where('customer_product_id', $p))->count();
         if ($open >= 5) {
             throw ValidationException::withMessages(['complaint_details' => 'You already have several open requests. Our team will contact you shortly.']);
@@ -101,7 +101,7 @@ class PortalController extends Controller
             'call_type' => 'portal',
         ], null);
         // Nobody at the office logged this one: tell the people who dispatch jobs.
-        app(NotificationService::class)->notifyRoles(['admin', 'coordinator'], 'new_complaint', 'New service request',
+        app(NotificationService::class)->notifyRoles(['admin', 'coordinator', 'head_engineer', 'service_tracker'], 'new_complaint', 'New service request',
             "{$job->customer?->name} raised {$job->crm_call_id} from the customer portal.", ['job_id' => $job->id]);
 
         return $this->created($this->publicJob($job->load('complaintType:id,name')), "Request {$job->crm_call_id} registered. We will contact you shortly.");
@@ -176,10 +176,10 @@ class PortalController extends Controller
         return [
             'id' => $job->id,
             'crm_call_id' => $job->crm_call_id,
-            'status' => $job->status->value,
+            'status' => $this->publicStatus($job->status->value),
             'complaint_type' => $job->complaintType?->name,
             'complaint_details' => $job->complaint_details,
-            'product' => $job->customerProduct?->product?->model_name,
+            'product' => $job->customerProduct?->model_no,
             'technician' => $job->technician?->name,
             'scheduled_at' => $job->scheduled_at,
             'created_at' => $job->created_at,
@@ -189,6 +189,12 @@ class PortalController extends Controller
     }
 
     /** Internal remarks (e.g. reassignment names) are not shown to customers verbatim. */
+    /** Whether a cancellation is being reviewed is the company's business: to the customer the job is still pending. */
+    private function publicStatus(string $status): string
+    {
+        return $status === 'cancel_requested' ? 'pending' : $status;
+    }
+
     private function publicRemark(?string $remarks): ?string
     {
         if (! $remarks) {
@@ -200,6 +206,8 @@ class PortalController extends Controller
             str_starts_with($remarks, 'Rescheduled') => 'Visit rescheduled',
             str_starts_with($remarks, 'Service started') => 'Technician started the service',
             str_starts_with($remarks, 'Visit closed') => 'Visit completed',
+            str_starts_with($remarks, 'Part pending') => 'Waiting for a part',
+            str_starts_with($remarks, 'Part received') => 'Part received',
             default => null,
         };
     }
