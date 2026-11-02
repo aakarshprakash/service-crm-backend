@@ -5,11 +5,14 @@ namespace App\Services;
 use App\Enums\JobStatus;
 use App\Enums\PaymentMethod;
 use App\Models\ActionTakenOption;
+use App\Models\CustomerProduct;
 use App\Models\InventoryItem;
+use App\Models\Invoice;
 use App\Models\JobImage;
 use App\Models\JobInventoryUsage;
 use App\Models\JobVoiceNote;
 use App\Models\JobVisit;
+use App\Models\ProductCategory;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\User;
@@ -107,18 +110,75 @@ class VisitService
 
     private function applyCallDetails(ServiceJob $job, array $data): ServiceJob
     {
+        // The app sends the plain text back with every save: unchanged, it must not wipe the office's formatting.
+        if (array_key_exists('complaint_details', $data) && (string) $data['complaint_details'] === (string) $job->complaint_details) {
+            unset($data['complaint_details']);
+        }
         $job->fill(array_intersect_key($data, array_flip(['complaint_details', 'complaint_type_id', 'complaint_summary_id', 'priority', 'call_type', 'customer_satisfaction_code'])))->save();
-
-        $customerFields = array_intersect_key($data, array_flip(['address', 'city', 'pincode', 'alt_phone']));
-        if ($customerFields) {
-            $job->customer->fill($customerFields)->save();
-        }
-        $productFields = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no', 'model_no']));
-        if ($productFields && $job->customerProduct) {
-            $job->customerProduct->fill($productFields)->save();
-        }
+        $this->applyProductDetails($job, $data);
 
         return $job;
+    }
+
+    /** The technician records the unit in front of them: they see the label, so they can correct any of it. */
+    private function applyProductDetails(ServiceJob $job, array $data): void
+    {
+        $details = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no', 'purchase_date', 'warranty_type', 'warranty_expiry', 'dealer_id', 'brand_id']));
+        $identity = array_filter(array_intersect_key($data, array_flip(['model_no', 'category_id'])), fn ($v) => trim((string) $v) !== '');
+        $product = $job->customerProduct;
+
+        if (! $product) {
+            if (! $identity && ! array_filter($details)) {
+                return;
+            }
+            $product = CustomerProduct::create(['customer_id' => $job->customer_id] + $details + $identity);
+            $job->forceFill(['customer_product_id' => $product->id])->save();
+            $job->setRelation('customerProduct', $product);
+        } else {
+            // The app sends these back unchanged with every save; only a real change counts.
+            $currentModel = $product->model_no ?: $product->product?->model_name;
+            if (isset($identity['model_no']) && $currentModel && strcasecmp(trim($identity['model_no']), $currentModel) === 0) {
+                unset($identity['model_no']);
+            }
+            $sameCategory = isset($identity['category_id']) && (int) $identity['category_id'] === (int) ($product->category_id ?: $product->product?->category_id);
+            if ($sameCategory && $job->product_category) {
+                unset($identity['category_id']);
+            }
+            $sameBrand = ! array_key_exists('brand_id', $details) || (int) $details['brand_id'] === (int) ($product->brand_id ?: $product->product?->brand_id);
+            // Corrected by hand, it's no longer that catalogue model: keep what the link was supplying.
+            if ($product->product_id && (isset($identity['model_no']) || (isset($identity['category_id']) && ! $sameCategory) || ! $sameBrand)) {
+                $product->fill([
+                    'model_no' => $currentModel,
+                    'brand_id' => $product->brand_id ?: $product->product?->brand_id,
+                    'category_id' => $product->category_id ?: $product->product?->category_id,
+                ]);
+                $product->product_id = null;
+            }
+            $product->fill($details + $identity)->save();
+        }
+
+        if (isset($identity['category_id'])) {
+            $job->forceFill(['product_category' => ProductCategory::whereKey($identity['category_id'])->value('name')])->save();
+        }
+    }
+
+    /** Asking to cancel without starting a visit, e.g. the customer called it off. The office decides. */
+    public function requestCancel(ServiceJob $job, User $technician, string $reason): ServiceJob
+    {
+        return DB::transaction(function () use ($job, $technician, $reason) {
+            $job = ServiceJob::whereKey($job->id)->lockForUpdate()->firstOrFail();
+            if ($job->assigned_technician_id !== $technician->id) {
+                throw ValidationException::withMessages(['job' => 'This job is not assigned to you.']);
+            }
+            if (! in_array($job->status, [JobStatus::Open, JobStatus::Pending, JobStatus::PartPending], true)) {
+                throw ValidationException::withMessages(['job' => $job->status === JobStatus::InProgress
+                    ? 'Close the visit in progress and choose “Cancel job” there.'
+                    : 'This job is '.str_replace('_', ' ', $job->status->value).'.']);
+            }
+            $this->jobs->requestCancel($job, $reason, $technician->id);
+
+            return $job;
+        });
     }
 
     public function addInventory(JobVisit $visit, User $technician, array $data): JobInventoryUsage
@@ -128,6 +188,11 @@ class VisitService
         $quantity = (float) $data['quantity'];
         if ($item->unit_of_measure === 'nos' && floor($quantity) != $quantity) {
             throw ValidationException::withMessages(['quantity' => 'Whole numbers only for items counted in nos.']);
+        }
+        // Parts allocated to the technician come first, unless the app asks for the branch's stock.
+        $source = $data['source'] ?? ($this->inventory->technicianHolds($technician->id, $item->id) >= $quantity ? 'technician' : 'branch');
+        if ($source === 'technician') {
+            return $this->inventory->consumeFromTechnician($visit, $item, $technician->id, $quantity, $data['unit_price'] ?? null, $technician->id);
         }
         $branchId = $data['branch_id'] ?? $technician->branch_id ?? $visit->job->branch_id;
         if (! $branchId) {
@@ -143,7 +208,7 @@ class VisitService
         if ($usage->job_visit_id !== $visit->id) {
             abort(404);
         }
-        $this->inventory->returnUsage($usage, $user->id);
+        $this->inventory->returnUsage($usage, $visit->technician_id, $user->id);
     }
 
     public function uploadImage(JobVisit $visit, string $type, UploadedFile $file, User $user): JobImage
@@ -266,6 +331,16 @@ class VisitService
             $method = $data['payment_method'] ?? null;
             $collect = (int) ($data['amount_collected'] ?? 0);
 
+            // Nothing is billed while the office decides. Parts go back first, so stock stays right if it's approved.
+            if ($status === 'cancelled') {
+                if ($visit->inventoryUsage()->exists()) {
+                    throw ValidationException::withMessages(['status' => 'Remove the parts from this visit before asking to cancel the job.']);
+                }
+                if ($labour + $spare > 0 || $collect > 0) {
+                    throw ValidationException::withMessages(['status' => 'A job being cancelled can’t have charges or a payment on this visit.']);
+                }
+            }
+
             if ($labour + $spare > 0 && ! $method) {
                 throw ValidationException::withMessages(['payment_method' => 'Select how the customer is paying.']);
             }
@@ -311,7 +386,13 @@ class VisitService
                 $this->jobs->transition($job, $jobStatus, $technician->id, 'Visit closed as '.str_replace('_', ' ', $status).($visit->actionTaken ? ' – '.$visit->actionTaken->name : ''));
             }
 
+            // The technician picks the bill type when the bill is first made. Once it exists it may
+            // already be with the customer, so changing it is for accounts (invoices.change_bill_type).
+            $newBill = ! Invoice::where('job_id', $job->id)->exists();
             $invoice = $this->invoices->syncForJob($job);
+            if ($invoice && $newBill && $status !== 'cancelled' && isset($data['is_gst'])) {
+                $invoice = $this->invoices->changeBillType($invoice, (bool) $data['is_gst']);
+            }
 
             $payment = null;
             if ($collect > 0) {

@@ -6,13 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Models\InventoryItem;
 use App\Models\InventoryStock;
 use App\Models\InventoryTransaction;
+use App\Enums\Role;
 use App\Models\Supplier;
+use App\Models\TechnicianStock;
+use App\Models\TechnicianStockMove;
+use App\Models\User;
 use App\Services\InventoryService;
+use App\Services\NotificationService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Spares & consumables (§5.7).
@@ -176,6 +182,73 @@ class InventoryController extends Controller
             ->paginate($this->perPage($request));
 
         return $this->paginated($rows);
+    }
+
+    // ---- Parts allocated to technicians ----------------------------------
+
+    /** What each technician is holding, and what it is worth at selling price. */
+    public function technicianStock(Request $request): JsonResponse
+    {
+        $rows = TechnicianStock::with(['technician:id,name', 'item:id,code,name,type,unit_of_measure,unit_price', 'branch:id,name'])
+            ->where('quantity', '>', 0)
+            ->when($request->filled('technician_id'), fn ($q) => $q->where('technician_id', $request->integer('technician_id')))
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $like = $this->like($request->string('search'));
+                $q->whereHas('item', fn ($i) => $i->where('name', 'like', $like)->orWhere('code', 'like', $like));
+            })
+            ->orderBy('technician_id')->orderBy('item_id')
+            ->paginate($this->perPage($request));
+
+        return $this->paginated($rows);
+    }
+
+    /** Every allocation, use on a job and return, for one technician or all. */
+    public function technicianMoves(Request $request): JsonResponse
+    {
+        $rows = TechnicianStockMove::with(['technician:id,name', 'item:id,code,name,unit_of_measure', 'branch:id,name', 'job:id,crm_call_id', 'creator:id,name'])
+            ->when($request->filled('technician_id'), fn ($q) => $q->where('technician_id', $request->integer('technician_id')))
+            ->when($request->filled('type'), fn ($q) => $q->where('type', $request->string('type')))
+            ->latest('id')
+            ->paginate($this->perPage($request));
+
+        return $this->paginated($rows);
+    }
+
+    public function allocate(Request $request, NotificationService $notifications): JsonResponse
+    {
+        [$data, $technician, $item] = $this->technicianStockInput($request);
+        $stock = $this->inventory->allocateToTechnician($technician, $data['branch_id'], $item, (float) $data['quantity'], $data['remarks'] ?? null, $request->user()->id);
+        $notifications->notifyUser($technician, 'parts_allocated', 'Parts allocated to you',
+            rtrim(rtrim(number_format((float) $data['quantity'], 3, '.', ''), '0'), '.')." {$item->unit_of_measure} of {$item->name}. Find them under Parts in the app.", ['item_id' => $item->id]);
+
+        return $this->created($stock, "Allocated to {$technician->name}.");
+    }
+
+    public function returnAllocation(Request $request): JsonResponse
+    {
+        [$data, $technician, $item] = $this->technicianStockInput($request);
+        $stock = $this->inventory->returnFromTechnician($technician, $data['branch_id'], $item, (float) $data['quantity'], $data['remarks'] ?? null, $request->user()->id);
+
+        return $this->created($stock, "Returned from {$technician->name}.");
+    }
+
+    /** @return array{0: array, 1: User, 2: InventoryItem} */
+    private function technicianStockInput(Request $request): array
+    {
+        $tenantId = app(TenantContext::class)->id();
+        $data = $request->validate([
+            'technician_id' => ['required', 'integer', Rule::exists('users', 'id')->where('tenant_id', $tenantId)->where('role', Role::Technician->value)],
+            'item_id' => ['required', 'integer', Rule::exists('inventory_items', 'id')->where('tenant_id', $tenantId)],
+            'branch_id' => ['required', 'integer', Rule::exists('branches', 'id')->where('tenant_id', $tenantId)],
+            'quantity' => ['required', 'numeric', 'gt:0', 'max:100000', 'decimal:0,3'],
+            'remarks' => ['nullable', 'string', 'max:500'],
+        ]);
+        $item = InventoryItem::findOrFail($data['item_id']);
+        if ($item->unit_of_measure === 'nos' && floor((float) $data['quantity']) != (float) $data['quantity']) {
+            throw ValidationException::withMessages(['quantity' => 'Whole numbers only for items counted in nos.']);
+        }
+
+        return [$data, User::findOrFail($data['technician_id']), $item];
     }
 
     // ---- Suppliers (FR-7.10) --------------------------------------------

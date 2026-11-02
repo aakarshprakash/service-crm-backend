@@ -60,7 +60,8 @@ class PortalController extends Controller
             ->findOrFail($id);
 
         $data = $this->publicJob($job) + [
-            'timeline' => $job->statusHistory->map(fn ($h) => ['status' => $this->publicStatus($h->status), 'at' => $h->changed_at, 'remarks' => $this->publicRemark($h->remarks)])->values(),
+            // Notes are the staff's own record of the job, not for the customer.
+            'timeline' => $job->statusHistory->where('status', '!=', 'note')->map(fn ($h) => ['status' => $this->publicStatus($h->status), 'at' => $h->changed_at, 'remarks' => $this->publicRemark($h->remarks)])->values(),
             'visits' => $job->visits->map(fn ($v) => [
                 'date' => $v->visit_date, 'status' => $v->status, 'action_taken' => $v->actionTaken?->name,
                 'summary' => $v->service_summary, 'total_charge' => $v->total_charge,

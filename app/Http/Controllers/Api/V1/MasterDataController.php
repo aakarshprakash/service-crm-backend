@@ -74,10 +74,13 @@ class MasterDataController extends Controller
                 ->toBase()->selectRaw('model_no, brand_id, MAX(id) as latest')->groupBy('model_no', 'brand_id')
                 ->orderByDesc('latest')->limit(500)->get(['model_no', 'brand_id'])
                 ->map(fn ($r) => ['model_no' => $r->model_no, 'brand_id' => $r->brand_id]),
+            'photo_types' => $tenant->photoTypes(),
+            'photo_labels' => (object) $tenant->setting('photo_labels', []),
             // Whether staff can choose GST / non-GST on a bill, and what a walk-in bill starts as.
             'billing' => [
                 'gst_registered' => (bool) $tenant->gstin,
                 'walkin_bills' => $tenant->setting('gst.walkin_bills'),
+                'job_bills' => $tenant->setting('gst.job_bills'),
             ],
             'job_age' => [                'warning' => (int) $tenant->setting('jobs.age_warning'),
                 'old' => (int) $tenant->setting('jobs.age_old'),

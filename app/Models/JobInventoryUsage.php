@@ -12,11 +12,12 @@ class JobInventoryUsage extends Model
 
     protected $table = 'job_inventory_usage';
 
-    protected $fillable = ['job_id', 'job_visit_id', 'item_id', 'branch_id', 'quantity', 'unit_price', 'total_price'];
+    protected $fillable = ['job_id', 'job_visit_id', 'item_id', 'branch_id', 'from_technician_stock', 'quantity', 'unit_price', 'total_price'];
 
     protected function casts(): array
     {
         return [
+            'from_technician_stock' => 'boolean',
             'quantity' => 'float',
             'unit_price' => 'integer',
             'total_price' => 'integer',

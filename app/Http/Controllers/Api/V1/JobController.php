@@ -30,7 +30,7 @@ class JobController extends Controller
     {
         $query = $this->filtered($request)
             ->with([
-                'customer:id,name,phone,address,city,pincode', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
+                'customer:id,name,phone,address,city,pincode,lat,lng', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
                 'complaintType:id,name', 'customerProduct:id,product_id,model_no,brand_id,category_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
                 'customerProduct.product.brand:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name',
             ]);
@@ -297,6 +297,17 @@ class JobController extends Controller
     }
 
     /** FR-5.6 reminder / 2nd service call. */
+    /** Adds an update to the job's timeline: its technician, or anyone in the office who manages jobs. */
+    public function addNote(Request $request, int $id): JsonResponse
+    {
+        $job = ServiceJob::findOrFail($id);
+        $this->authorizeView($request->user(), $job);
+        abort_unless($request->user()->isTechnician() || $request->user()->can('jobs.manage'), 403);
+        $data = $request->validate(['note' => ['required', 'string', 'max:500']], ['note.required' => 'Write the update first.']);
+
+        return $this->created($this->jobs->addNote($job, trim($data['note']), $request->user()), 'Update added.');
+    }
+
     public function followUp(Request $request, int $id): JsonResponse
     {
         $parent = ServiceJob::findOrFail($id);

@@ -166,6 +166,7 @@ Route::prefix('v1')->group(function () {
             Route::get('jobs/calendar', [JobController::class, 'calendar']);
             Route::get('jobs/{id}', [JobController::class, 'show'])->whereNumber('id');
             Route::get('jobs/{id}/job-card', [JobController::class, 'jobCard'])->whereNumber('id');
+            Route::post('jobs/{id}/notes', [JobController::class, 'addNote'])->whereNumber('id')->middleware('throttle:30,1');
         });
         Route::middleware('can:jobs.approve_cancel')->group(function () {
             Route::post('jobs/{id}/cancel/approve', [JobController::class, 'approveCancel'])->whereNumber('id');
@@ -189,6 +190,9 @@ Route::prefix('v1')->group(function () {
         Route::middleware('can:visits.execute')->group(function () {
             Route::post('jobs/{id}/visits/start', [VisitController::class, 'start'])->whereNumber('id');
             Route::patch('jobs/{id}/details', [VisitController::class, 'prepare'])->whereNumber('id');
+            Route::post('jobs/{id}/cancel-request', [VisitController::class, 'requestCancel'])->whereNumber('id');
+            Route::post('jobs/{id}/customer-location', [JobLocationController::class, 'fromJob'])->whereNumber('id');
+            Route::get('my/parts', [VisitController::class, 'myParts']);
             Route::get('visits/active', [VisitController::class, 'active']);
             Route::get('visits/{id}', [VisitController::class, 'show'])->whereNumber('id');
             Route::patch('visits/{id}', [VisitController::class, 'update'])->whereNumber('id');
@@ -298,6 +302,10 @@ Route::prefix('v1')->group(function () {
             Route::post('inventory/stock-in', [InventoryController::class, 'stockIn']);
             Route::post('inventory/transfer', [InventoryController::class, 'transfer']);
             Route::post('inventory/adjust', [InventoryController::class, 'adjust']);
+            Route::get('inventory/technician-stock', [InventoryController::class, 'technicianStock']);
+            Route::get('inventory/technician-moves', [InventoryController::class, 'technicianMoves']);
+            Route::post('inventory/technician-stock/allocate', [InventoryController::class, 'allocate']);
+            Route::post('inventory/technician-stock/return', [InventoryController::class, 'returnAllocation']);
             Route::get('inventory/transactions', [InventoryController::class, 'transactions']);
             Route::get('suppliers', [InventoryController::class, 'suppliers']);
             Route::post('suppliers', [InventoryController::class, 'storeSupplier']);

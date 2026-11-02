@@ -51,7 +51,8 @@ class TechnicianJobFlowTest extends TestCase
             'address' => '12, MG Road', 'pincode' => '560001', 'serial_no' => 'NEW-SN-1', 'complaint_details' => 'Noise from outdoor unit',
         ])->assertOk();
 
-        $this->assertDatabaseHas('customers', ['id' => $customer->id, 'address' => '12, MG Road', 'pincode' => '560001']);
+        // The customer's own details stay with the office.
+        $this->assertDatabaseMissing('customers', ['id' => $customer->id, 'address' => '12, MG Road']);
         $this->assertDatabaseHas('customer_products', ['id' => $productId, 'serial_no' => 'NEW-SN-1']);
         $this->assertDatabaseHas('service_jobs', ['id' => $job->id, 'complaint_details' => 'Noise from outdoor unit']);
 

@@ -50,6 +50,18 @@ class Tenant extends Model
         // Printed on invoices, for customers paying by bank transfer.
         'bank' => ['account_name' => null, 'bank_name' => null, 'account_no' => null, 'ifsc' => null, 'branch' => null],
         'invoice_template' => 'classic', // classic | modern
+        // Photo sections on a visit, [{key, label}]; null means DEFAULT_PHOTO_TYPES. Companies add their own, no app update needed.
+        'photo_types' => null,
+        // Every section name used, by key: photos in a section removed later still show its name.
+        'photo_labels' => [],
+    ];
+
+    public const DEFAULT_PHOTO_TYPES = [
+        ['key' => 'bill', 'label' => 'Bill'],
+        ['key' => 'serial', 'label' => 'Serial number'],
+        ['key' => 'complaint_part', 'label' => 'Faulty part'],
+        ['key' => 'new_part', 'label' => 'New part'],
+        ['key' => 'other', 'label' => 'Other'],
     ];
 
     protected function casts(): array
@@ -84,7 +96,22 @@ class Tenant extends Model
 
     public function mergedSettings(): array
     {
-        return array_replace_recursive(self::DEFAULT_SETTINGS, $this->settings ?? []);
+        $merged = array_replace_recursive(self::DEFAULT_SETTINGS, $this->settings ?? []);
+        $merged['photo_types'] ??= self::DEFAULT_PHOTO_TYPES;
+
+        return $merged;
+    }
+
+    /** @return list<array{key: string, label: string}> */
+    public function photoTypes(): array
+    {
+        return $this->mergedSettings()['photo_types'];
+    }
+
+    /** What a photo can be filed under. The original sections stay valid for installed apps that have them built in. */
+    public function acceptedPhotoTypes(): array
+    {
+        return array_values(array_unique([...array_column($this->photoTypes(), 'key'), ...array_column(self::DEFAULT_PHOTO_TYPES, 'key')]));
     }
 
     /** Feature flag granted by the tenant's subscription plan. */

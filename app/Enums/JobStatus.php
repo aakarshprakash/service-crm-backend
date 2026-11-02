@@ -21,11 +21,11 @@ enum JobStatus: string
     public function canTransitionTo(self $to): bool
     {
         return match ($this) {
-            self::Open => in_array($to, [self::InProgress, self::PartPending, self::Cancelled], true),
+            self::Open => in_array($to, [self::InProgress, self::PartPending, self::CancelRequested, self::Cancelled], true),
             self::InProgress => in_array($to, [self::Pending, self::PartPending, self::CancelRequested, self::Completed, self::Cancelled], true),
-            self::Pending => in_array($to, [self::InProgress, self::PartPending, self::Cancelled], true),
+            self::Pending => in_array($to, [self::InProgress, self::PartPending, self::CancelRequested, self::Cancelled], true),
             // Part received: back to waiting for a visit, or the technician brings it along and starts straight away.
-            self::PartPending => in_array($to, [self::Open, self::Pending, self::InProgress, self::Cancelled], true),
+            self::PartPending => in_array($to, [self::Open, self::Pending, self::InProgress, self::CancelRequested, self::Cancelled], true),
             // A technician asked to cancel: the office approves it, or sends the job back.
             self::CancelRequested => in_array($to, [self::Pending, self::Cancelled], true),
             default => false,

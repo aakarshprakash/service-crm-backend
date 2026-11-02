@@ -58,7 +58,7 @@ class DashboardController extends Controller
             ->where(fn ($q) => $q->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()])
                 ->orWhere('scheduled_at', '<', now($tz)->startOfDay()->utc()))
             ->with([
-                'customer:id,name,phone,address,city,pincode', 'complaintType:id,name', 'serviceLocation:id,name',
+                'customer:id,name,phone,address,city,pincode,lat,lng', 'complaintType:id,name', 'serviceLocation:id,name',
                 'customerProduct:id,product_id,model_no,brand_id,category_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
                 'customerProduct.product.brand:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name',
             ])

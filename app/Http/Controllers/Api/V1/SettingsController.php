@@ -19,6 +19,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -118,8 +119,19 @@ class SettingsController extends Controller
             'bank.ifsc' => ['nullable', 'string', 'max:20'],
             'bank.branch' => ['nullable', 'string', 'max:100'],
             'invoice_template' => ['sometimes', Rule::in(InvoiceService::TEMPLATES)],
+            'photo_types' => ['sometimes', 'array', 'min:1', 'max:20'],
+            'photo_types.*.key' => ['nullable', 'string', 'max:20'],
+            'photo_types.*.label' => ['required', 'string', 'max:40', 'distinct:ignore_case'],
+        ], [
+            'photo_types.min' => 'Keep at least one photo section.',
+            'photo_types.max' => 'You can have up to 20 photo sections.',
+            'photo_types.*.label.required' => 'Give every photo section a name.',
+            'photo_types.*.label.distinct' => 'Two photo sections have the same name.',
         ]);
         $merged = array_replace_recursive($tenant->mergedSettings(), $data);
+        // A list is replaced whole: merging would bring back sections that were removed.
+        $merged['photo_types'] = isset($data['photo_types']) ? $this->photoSections($data['photo_types'], [...$tenant->acceptedPhotoTypes(), ...array_keys($tenant->setting('photo_labels', []))]) : $tenant->photoTypes();
+        $merged['photo_labels'] = array_merge($tenant->setting('photo_labels', []), array_column($tenant->photoTypes(), 'label', 'key'), array_column($merged['photo_types'], 'label', 'key'));
         if ($merged['jobs']['age_warning'] >= $merged['jobs']['age_old']) {
             throw ValidationException::withMessages(['jobs.age_old' => 'Orange must start later than amber.']);
         }
@@ -133,6 +145,30 @@ class SettingsController extends Controller
         $tenant->update(['settings' => $merged]);
 
         return $this->ok($tenant->mergedSettings(), 'Settings saved.');
+    }
+
+    /**
+     * Existing sections keep their key, so a rename leaves their photos in place. A new one gets a key from
+     * its name, short enough for job_images.type and clear of the kinds the app files separately.
+     */
+    private function photoSections(array $rows, array $known): array
+    {
+        $used = ['signature', 'voice', 'receipt'];
+        $sections = [];
+        foreach ($rows as $row) {
+            $key = $row['key'] ?? null;
+            if (! in_array($key, $known, true) || in_array($key, $used, true)) {
+                $base = mb_substr(Str::slug($row['label'], '_'), 0, 16) ?: 'photo';
+                $key = $base;
+                for ($n = 2; in_array($key, $used, true) || in_array($key, $known, true); $n++) {
+                    $key = "{$base}_{$n}";
+                }
+            }
+            $used[] = $key;
+            $sections[] = ['key' => $key, 'label' => trim($row['label'])];
+        }
+
+        return $sections;
     }
 
     /** Tenant's own payment-gateway merchant account (§5.14). */

@@ -251,6 +251,18 @@ class JobService
         ]);
     }
 
+    /** A dated update on the job (what was found, what the customer said). Keeps the job's status. */
+    public function addNote(ServiceJob $job, string $note, User $by): JobStatusHistory
+    {
+        return JobStatusHistory::create([
+            'job_id' => $job->id,
+            'status' => 'note',
+            'changed_by' => $by->id,
+            'remarks' => mb_substr($note, 0, 500),
+            'changed_at' => now(),
+        ])->load('user:id,name');
+    }
+
     private function notifyAssignment(ServiceJob $job, string $title): void
     {
         $tech = User::inTenant($job->tenant_id)->find($job->assigned_technician_id);
