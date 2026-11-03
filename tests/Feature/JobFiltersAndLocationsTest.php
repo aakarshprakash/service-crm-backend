@@ -113,7 +113,9 @@ class JobFiltersAndLocationsTest extends TestCase
         $this->job(null, ['service_location_id' => $kannur->id], ['status' => 'cancelled']);
         $this->job(null, ['scheduled_at' => now()->addDay()]);
 
-        $data = $this->actingAsUser($this->admin)->getJson('/api/v1/jobs/location-analysis?from='.now()->subDays(5)->toDateString().'&to='.now()->toDateString())->assertOk()->json('data');
+        // The period is in the company's timezone, which can already be tomorrow in UTC terms.
+        $today = now($this->tenant->timezone);
+        $data = $this->actingAsUser($this->admin)->getJson('/api/v1/jobs/location-analysis?from='.$today->copy()->subDays(5)->toDateString().'&to='.$today->copy()->toDateString())->assertOk()->json('data');
 
         $byName = collect($data['locations'])->keyBy('name');
         $row = $byName['Kannur'];

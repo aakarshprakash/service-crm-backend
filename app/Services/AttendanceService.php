@@ -9,6 +9,7 @@ use App\Models\EmployeeProfile;
 use App\Models\Holiday;
 use App\Models\LeaveRequest;
 use App\Models\PunchLog;
+use App\Models\Shift;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Support\Geo;
@@ -23,6 +24,9 @@ use Illuminate\Validation\ValidationException;
  *
  * Day status, first match wins: future · not joined / left · manual adjustment ·
  * approved leave · punched (present) · holiday · weekly off · absent.
+ *
+ * Shifts add late arrival, early leaving and extra time to a day. They only flag: a late day
+ * is still a day present, so payroll is unaffected.
  */
 class AttendanceService
 {
@@ -65,7 +69,13 @@ class AttendanceService
             }
         }
 
+        // Kept with the punch, so changing a shift later doesn't rewrite this day.
+        $shift = $this->shiftFor(EmployeeProfile::with('shift')->where('user_id', $user->id)->first());
         $log = PunchLog::create([
+            'shift_name' => $shift?->name,
+            'shift_start' => $shift?->start_time,
+            'shift_end' => $shift?->end_time,
+            'shift_grace' => $shift?->grace_minutes,
             'user_id' => $user->id,
             'type' => $data['type'],
             'lat' => $data['lat'] ?? null,
@@ -79,6 +89,22 @@ class AttendanceService
         $user->forceFill(['punch_status' => $data['type'], 'punched_at' => now()])->save();
 
         return $log;
+    }
+
+    /** The shift someone works now: their own, otherwise the company's default. */
+    public function shiftFor(?EmployeeProfile $profile, ?Shift $default = null): ?Shift
+    {
+        $own = $profile?->shift;
+        if ($own?->is_active) {
+            return $own;
+        }
+
+        return $default ?? $this->defaultShift();
+    }
+
+    private function defaultShift(): ?Shift
+    {
+        return Shift::where('is_default', true)->where('is_active', true)->first();
     }
 
     private function human(int $metres): string
@@ -108,7 +134,8 @@ class AttendanceService
             ->where('from_date', '<=', $to)->where('to_date', '>=', $from)->get()->groupBy('user_id');
         $holidays = Holiday::where('is_active', true)->whereBetween('date', [$from, $to])->pluck('name', 'date')
             ->mapWithKeys(fn ($name, $date) => [substr((string) $date, 0, 10) => $name]);
-        $profiles = EmployeeProfile::whereIn('user_id', $ids)->get()->keyBy('user_id');
+        $profiles = EmployeeProfile::with('shift')->whereIn('user_id', $ids)->get()->keyBy('user_id');
+        $defaultShift = $this->defaultShift();
 
         $out = [];
         foreach ($users as $user) {
@@ -117,6 +144,7 @@ class AttendanceService
             $joined = $profile?->date_of_joining?->toDateString();
             $left = $profile?->date_of_leaving?->toDateString();
             $userLeaves = $leaves[$user->id] ?? collect();
+            $currentShift = $this->shiftFor($profile, $defaultShift);
 
             foreach (CarbonPeriod::create($from, $to) as $day) {
                 $d = $day->format('Y-m-d');
@@ -135,8 +163,18 @@ class AttendanceService
                     in_array($day->isoWeekday(), $offs, true) => 'weekly_off',
                     default => 'absent',
                 };
+                // Only a normal working day is judged against the shift.
+                $working = $adj === null && $leave === null && ! isset($holidays[$d]) && ! in_array($day->isoWeekday(), $offs, true);
+                [$late, $early, $extra] = $this->timing($dayPunches, $d, $tz, $minutes, $working);
+                $shiftPunch = $dayPunches->first(fn (PunchLog $p) => $p->shift_start !== null);
 
                 $out[$user->id][$d] = [
+                    'late_minutes' => $late,
+                    'early_minutes' => $early,
+                    'extra_minutes' => $extra,
+                    'shift' => $shiftPunch
+                        ? ['name' => $shiftPunch->shift_name, 'start' => $shiftPunch->shift_start, 'end' => $shiftPunch->shift_end]
+                        : ($currentShift ? ['name' => $currentShift->name, 'start' => $currentShift->start_time, 'end' => $currentShift->end_time] : null),
                     'status' => $status,
                     'code' => self::CODES[$status] ?? '',
                     'in' => $in,
@@ -153,6 +191,33 @@ class AttendanceService
         }
 
         return $out;
+    }
+
+    /**
+     * Late by, left early by and extra minutes, from the shift kept with the day's punches.
+     *
+     * @return array{0: int, 1: int, 2: int}
+     */
+    private function timing(Collection $punches, string $date, string $tz, int $minutes, bool $working): array
+    {
+        $first = $punches->firstWhere('type', 'in');
+        if (! $first?->shift_start || ! $first->shift_end) {
+            return [0, 0, 0];
+        }
+        // A day off has no hours to keep: whatever was worked is extra.
+        if (! $working) {
+            return [0, 0, $minutes];
+        }
+        $start = CarbonImmutable::parse("{$date} {$first->shift_start}", $tz);
+        $end = CarbonImmutable::parse("{$date} {$first->shift_end}", $tz);
+
+        $lateBy = (int) floor(($first->created_at->getTimestamp() - $start->getTimestamp()) / 60);
+        $last = $punches->last();
+        // Still on duty, or back from a break, isn't leaving early.
+        $earlyBy = $last->type === 'out' ? (int) floor(($end->getTimestamp() - $last->created_at->getTimestamp()) / 60) : 0;
+        $length = (int) (($end->getTimestamp() - $start->getTimestamp()) / 60);
+
+        return [$lateBy > (int) $first->shift_grace ? $lateBy : 0, max(0, $earlyBy), max(0, $minutes - $length)];
     }
 
     /** @return array{0: ?string, 1: ?string, 2: int, 3: bool} first in, last out, minutes worked, any punch outside the fence */
@@ -189,13 +254,18 @@ class AttendanceService
      * Totals for a set of days from days().
      *
      * @param  array<string, array{status: string}>  $days
-     * @return array{present: float, half_days: int, absent: float, paid_leave: float, unpaid_leave: float, holidays: int, weekly_offs: int, not_joined: int, minutes: int}
+     * @return array{present: float, half_days: int, absent: float, paid_leave: float, unpaid_leave: float, holidays: int, weekly_offs: int, not_joined: int, minutes: int, late_days: int, late_minutes: int, early_days: int, early_minutes: int, extra_minutes: int}
      */
     public function summarize(array $days): array
     {
-        $s = ['present' => 0.0, 'half_days' => 0, 'absent' => 0.0, 'paid_leave' => 0.0, 'unpaid_leave' => 0.0, 'holidays' => 0, 'weekly_offs' => 0, 'not_joined' => 0, 'minutes' => 0];
+        $s = ['present' => 0.0, 'half_days' => 0, 'absent' => 0.0, 'paid_leave' => 0.0, 'unpaid_leave' => 0.0, 'holidays' => 0, 'weekly_offs' => 0, 'not_joined' => 0, 'minutes' => 0, 'late_days' => 0, 'late_minutes' => 0, 'early_days' => 0, 'early_minutes' => 0, 'extra_minutes' => 0];
         foreach ($days as $day) {
             $s['minutes'] += $day['minutes'] ?? 0;
+            $s['late_days'] += ($day['late_minutes'] ?? 0) > 0 ? 1 : 0;
+            $s['late_minutes'] += $day['late_minutes'] ?? 0;
+            $s['early_days'] += ($day['early_minutes'] ?? 0) > 0 ? 1 : 0;
+            $s['early_minutes'] += $day['early_minutes'] ?? 0;
+            $s['extra_minutes'] += $day['extra_minutes'] ?? 0;
             $halfLeave = ! empty($day['half_day_leave']);
             switch ($day['status']) {
                 case 'present': $s['present'] += 1; break;

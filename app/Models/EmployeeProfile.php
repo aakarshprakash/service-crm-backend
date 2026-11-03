@@ -14,7 +14,7 @@ class EmployeeProfile extends Model
 
     protected $fillable = [
         'user_id', 'employee_code', 'designation', 'department', 'date_of_joining', 'date_of_leaving',
-        'monthly_salary', 'components', 'weekly_offs', 'bank_name', 'bank_account', 'ifsc', 'pan', 'uan',
+        'monthly_salary', 'components', 'weekly_offs', 'shift_id', 'bank_name', 'bank_account', 'ifsc', 'pan', 'uan',
     ];
 
     protected function casts(): array
@@ -31,6 +31,11 @@ class EmployeeProfile extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function shift(): BelongsTo
+    {
+        return $this->belongsTo(Shift::class);
     }
 
     /** ISO weekdays off (7 = Sunday). Defaults to Sunday. */

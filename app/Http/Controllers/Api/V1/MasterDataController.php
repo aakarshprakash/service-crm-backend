@@ -19,6 +19,7 @@ use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ServiceJob;
 use App\Models\ServiceLocation;
+use App\Models\Shift;
 use App\Models\UpiAccount;
 use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Model;
@@ -48,6 +49,7 @@ class MasterDataController extends Controller
         'upi-accounts' => UpiAccount::class,
         'leave-types' => LeaveType::class,
         'holidays' => Holiday::class,
+        'shifts' => Shift::class,
     ];
 
     /** All active lookups in one call for forms (cached per request by the client). */
@@ -74,6 +76,7 @@ class MasterDataController extends Controller
                 ->toBase()->selectRaw('model_no, brand_id, MAX(id) as latest')->groupBy('model_no', 'brand_id')
                 ->orderByDesc('latest')->limit(500)->get(['model_no', 'brand_id'])
                 ->map(fn ($r) => ['model_no' => $r->model_no, 'brand_id' => $r->brand_id]),
+            'shifts' => Shift::where('is_active', true)->orderBy('start_time')->get(['id', 'name', 'start_time', 'end_time', 'grace_minutes', 'is_default']),
             'photo_types' => $tenant->photoTypes(),
             'photo_labels' => (object) $tenant->setting('photo_labels', []),
             // Whether staff can choose GST / non-GST on a bill, and what a walk-in bill starts as.
@@ -232,6 +235,15 @@ class MasterDataController extends Controller
         $sometimes = $record ? 'sometimes' : 'required';
 
         return match ($type) {
+            'shifts' => [
+                'name' => [$sometimes, 'string', 'max:60', $uniqueName],
+                'start_time' => [$sometimes, 'date_format:H:i'],
+                // Same-day shifts for now: punches are counted per calendar date, so overnight hours wouldn't add up.
+                'end_time' => [$sometimes, 'date_format:H:i', 'after:start_time'],
+                'grace_minutes' => ['nullable', 'integer', 'min:0', 'max:120'],
+                'is_default' => ['boolean'],
+                'is_active' => ['boolean'],
+            ],
             'products' => [
                 'model_name' => [$sometimes, 'string', 'max:150'],
                 'brand_id' => ['nullable', 'integer', $exists('brands')],

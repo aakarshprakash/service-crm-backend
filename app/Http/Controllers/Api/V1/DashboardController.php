@@ -6,6 +6,7 @@ use App\Enums\Role;
 use App\Http\Controllers\Controller;
 use App\Models\Branch;
 use App\Models\CashClose;
+use App\Models\EmployeeProfile;
 use App\Models\InventoryStock;
 use App\Models\Invoice;
 use App\Models\JobVisit;
@@ -13,6 +14,7 @@ use App\Models\Payment;
 use App\Models\Review;
 use App\Models\ServiceJob;
 use App\Models\User;
+use App\Services\AttendanceService;
 use App\Services\CashCloseService;
 use App\Services\Reports\LocationAnalysis;
 use App\Support\TenantContext;
@@ -89,6 +91,13 @@ class DashboardController extends Controller
      * What the app tells a technician about punching: whether the branch geofence applies to them
      * (off / flag / enforce), the office location and radius, and whether a visit needs a punch-in first.
      */
+    private function shiftInfo(User $user): ?array
+    {
+        $shift = app(AttendanceService::class)->shiftFor(EmployeeProfile::with('shift')->where('user_id', $user->id)->first());
+
+        return $shift ? ['name' => $shift->name, 'start' => $shift->start_time, 'end' => $shift->end_time, 'grace_minutes' => $shift->grace_minutes] : null;
+    }
+
     private function punchRules(User $user): array
     {
         $tenant = app(TenantContext::class)->tenant();
@@ -101,6 +110,7 @@ class DashboardController extends Controller
             'branch' => $branch ? ['name' => $branch->name, 'lat' => $branch->lat, 'lng' => $branch->lng, 'radius' => $branch->geofence_radius] : null,
             'require_location' => (bool) $tenant->setting('attendance.require_location', false),
             'require_punch_in' => (bool) $tenant->setting('jobs.require_punch_in', true),
+            'shift' => $this->shiftInfo($user),
         ];
     }
 

@@ -313,15 +313,17 @@ class ReportService
             return [
                 'name' => $u->name, 'role' => $u->role->label(), 'branch' => $u->branch?->name, 'present' => $s['present'],
                 'paid_leave' => $s['paid_leave'], 'unpaid_leave' => $s['unpaid_leave'], 'absent' => $s['absent'], 'holidays' => $s['holidays'],
-                'weekly_offs' => $s['weekly_offs'], 'hours' => round($s['minutes'] / 60, 1), 'outside' => $outside, '_flag' => $s['absent'] >= 3,
+                'weekly_offs' => $s['weekly_offs'], 'hours' => round($s['minutes'] / 60, 1), 'late_days' => $s['late_days'], 'late_hours' => round($s['late_minutes'] / 60, 1),
+                'early_days' => $s['early_days'], 'extra_hours' => round($s['extra_minutes'] / 60, 1), 'outside' => $outside, '_flag' => $s['absent'] >= 3,
             ];
         });
 
         return new ReportResult([
             'name' => ['Staff'], 'role' => ['Role'], 'branch' => ['Branch'], 'present' => ['Present', 'quantity'], 'paid_leave' => ['Paid leave', 'quantity'],
             'unpaid_leave' => ['Unpaid leave', 'quantity'], 'absent' => ['Absent', 'quantity'], 'holidays' => ['Holidays', 'number'],
-            'weekly_offs' => ['Weekly offs', 'number'], 'hours' => ['Hours worked', 'quantity'], 'outside' => ['Punches outside fence', 'number'],
-        ], $rows->all(), ['Staff' => $rows->count(), 'Total absent days' => $rows->sum('absent')]);
+            'weekly_offs' => ['Weekly offs', 'number'], 'hours' => ['Hours worked', 'quantity'], 'late_days' => ['Late days', 'number'], 'late_hours' => ['Hours late', 'quantity'],
+            'early_days' => ['Left early', 'number'], 'extra_hours' => ['Extra hours', 'quantity'], 'outside' => ['Punches outside fence', 'number'],
+        ], $rows->all(), ['Staff' => $rows->count(), 'Total absent days' => $rows->sum('absent'), 'Total late days' => $rows->sum('late_days')]);
     }
 
     private function leave(?int $limit): ReportResult
