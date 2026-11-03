@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Expense;
+use App\Models\Invoice;
 use App\Models\Payment;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonPeriod;
@@ -55,13 +56,15 @@ class BooksService
         $expense = (int) $expenseByMethod->sum();
         $cashIn = (int) ($incomeByMethod['cash'] ?? 0);
         $cashOut = (int) ($expenseByMethod['cash'] ?? 0);
+        $gst = $this->gstCollected($start, $end, $branchId);
 
         return [
             'from' => $from,
             'to' => $to,
-            'income' => $income,
+            'income' => $income,                 // money received (GST-inclusive)
+            'gst' => $gst,                       // GST inside that money – owed to the government, not income
             'expense' => $expense,
-            'net' => $income - $expense,
+            'net' => $income - $gst - $expense,
             'income_by_method' => $incomeByMethod,
             'income_by_source' => ['job' => (int) ($incomeBySource['job'] ?? 0), 'walk_in' => (int) ($incomeBySource['walk_in'] ?? 0)],
             'expense_by_method' => $expenseByMethod,
@@ -72,19 +75,71 @@ class BooksService
     }
 
     /**
+     * GST contained in the payments received between $start and $end (UTC).
+     *
+     * Each payment carries its invoice's GST in proportion, worked out cumulatively:
+     * GST up to and including a payment = round(paid so far × invoice GST / invoice total), and the payment's
+     * share is the increase. A fully paid invoice's shares therefore add up to exactly its GST, to the paisa.
+     */
+    public function gstCollected(CarbonImmutable $start, CarbonImmutable $end, ?int $branchId = null): int
+    {
+        return array_sum($this->gstByDay($start, $end, 'UTC', $branchId));
+    }
+
+    /** The same GST, by local payment date: [Y-m-d => paise]. */
+    public function gstByDay(CarbonImmutable $start, CarbonImmutable $end, string $tz, ?int $branchId = null): array
+    {
+        $invoiceIds = Payment::query()->where('payments.status', 'success')->whereBetween('payments.paid_at', [$start, $end])
+            ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')
+            ->where('invoices.is_gst', true)
+            ->when($branchId, fn ($q) => $q->where('invoices.branch_id', $branchId))
+            ->distinct()->pluck('invoices.id');
+        if ($invoiceIds->isEmpty()) {
+            return [];
+        }
+
+        $invoices = Invoice::whereIn('id', $invoiceIds)->get(['id', 'total_amount', 'cgst_amount', 'sgst_amount', 'igst_amount'])->keyBy('id');
+        $payments = Payment::whereIn('invoice_id', $invoiceIds)->where('status', 'success')
+            ->orderBy('paid_at')->orderBy('id')->get(['id', 'invoice_id', 'amount', 'paid_at']);
+
+        $byDay = [];
+        foreach ($payments->groupBy('invoice_id') as $invoiceId => $rows) {
+            $inv = $invoices[$invoiceId];
+            $tax = $inv->cgst_amount + $inv->sgst_amount + $inv->igst_amount;
+            if ($inv->total_amount <= 0 || $tax === 0) {
+                continue;
+            }
+            $paid = 0;
+            $taxSoFar = 0;
+            foreach ($rows as $p) {
+                $paid = min($inv->total_amount, $paid + (int) $p->amount);
+                $upTo = intdiv(2 * $paid * $tax + $inv->total_amount, 2 * $inv->total_amount);
+                if ($p->paid_at >= $start && $p->paid_at <= $end) {
+                    $day = CarbonImmutable::parse($p->paid_at)->timezone($tz)->toDateString();
+                    $byDay[$day] = ($byDay[$day] ?? 0) + $upTo - $taxSoFar;
+                }
+                $taxSoFar = $upTo;
+            }
+        }
+
+        return $byDay;
+    }
+
+    /**
      * Every rupee in and out, oldest first.
      *
      * @return list<array{at: string, kind: string, ref: ?string, party: ?string, details: ?string, method: string, in: int, out: int}>
      */
-    public function dayBook(string $from, string $to, string $tz, ?int $branchId = null, int $limit = 5000): array
+    public function dayBook(string $from, string $to, string $tz, ?int $branchId = null): array
     {
         [$start, $end] = $this->bounds($from, $to, $tz);
 
+        // No row cap: the day book's totals must include every entry in the period.
         $in = Payment::query()->where('payments.status', 'success')->whereBetween('payments.paid_at', [$start, $end])
             ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')
             ->leftJoin('customers', 'customers.id', '=', 'invoices.customer_id')
             ->when($branchId, fn ($q) => $q->where('invoices.branch_id', $branchId))
-            ->orderBy('payments.paid_at')->limit($limit)
+            ->orderBy('payments.paid_at')->orderBy('payments.id')
             ->get(['payments.paid_at', 'payments.receipt_number', 'payments.method', 'payments.amount', 'invoices.invoice_number', 'invoices.source', 'customers.name as customer'])
             ->map(fn ($p) => [
                 'at' => CarbonImmutable::parse($p->paid_at)->timezone($tz)->format('Y-m-d H:i'),
@@ -99,7 +154,7 @@ class BooksService
 
         $out = Expense::query()->whereBetween('expense_date', [$from, $to])
             ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
-            ->with('category:id,name')->orderBy('expense_date')->orderBy('id')->limit($limit)->get()
+            ->with('category:id,name')->orderBy('expense_date')->orderBy('id')->get()
             ->map(fn (Expense $e) => [
                 'at' => $e->expense_date->format('Y-m-d').' 00:00',
                 'kind' => 'Expense',

@@ -73,6 +73,21 @@ class DemoSeeder extends Seeder
             'settings' => array_replace_recursive($tenant->mergedSettings(), ['notifications' => ['sms' => true, 'whatsapp' => true]]),
         ]);
 
+        // Give the demo company the platform SMTP account from .env (MAIL_*) so Settings → Email is pre-filled.
+        $smtp = config('mail.mailers.smtp');
+        if (config('mail.default') === 'smtp' && ! empty($smtp['host']) && ! empty($smtp['username'])) {
+            $tenant->mail_credentials = array_filter([
+                'host' => $smtp['host'],
+                'port' => (int) $smtp['port'],
+                'encryption' => ($smtp['scheme'] ?? null) === 'smtps' || (int) $smtp['port'] === 465 ? 'ssl' : 'tls',
+                'username' => $smtp['username'],
+                'password' => $smtp['password'],
+                'from_address' => config('mail.from.address'),
+                'from_name' => $tenant->name,
+            ]);
+            $tenant->save();
+        }
+
         app(TenantContext::class)->runAs($tenant->id, fn () => $this->seedTenant($tenant, $admin));
         Carbon::setTestNow();
         $this->call(V21DemoSeeder::class);
@@ -169,6 +184,11 @@ class DemoSeeder extends Seeder
         $actions = ActionTakenOption::pluck('id', 'name');
         $methods = ['cash', 'cash', 'cash', 'upi', 'upi', 'cheque', 'credit'];
         $coordinator = User::where('email', 'coordinator@demo.test')->first();
+
+        // Visits can only start while punched in (jobs.require_punch_in); final punch state is set below.
+        foreach ($techs as $tech) {
+            $tech->forceFill(['punch_status' => 'in'])->save();
+        }
 
         foreach (range(30, 0) as $daysAgo) {
             foreach (range(1, mt_rand(1, 3)) as $n) {

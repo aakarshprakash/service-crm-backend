@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\CustomerProduct;
+use App\Models\Invoice;
 use App\Models\User;
 use App\Support\Audit;
 use App\Support\TenantContext;
@@ -18,9 +19,15 @@ class CustomerController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        $open = ['open', 'pending', 'part_pending', 'cancel_requested', 'in_progress'];
         $customers = Customer::query()
             ->with('branch:id,name')
-            ->withCount('jobs')
+            ->withCount(['jobs', 'products', 'jobs as open_jobs_count' => fn ($j) => $j->whereIn('status', $open)])
+            ->withSum('invoices as outstanding', 'balance_amount')
+            ->withMax('jobs as last_job_at', 'created_at')
+            // Quick views: customers with work in hand, or with money to collect.
+            ->when($request->input('view') === 'open', fn ($q) => $q->whereHas('jobs', fn ($j) => $j->whereIn('status', $open)))
+            ->when($request->input('view') === 'dues', fn ($q) => $q->whereHas('invoices', fn ($i) => $i->where('balance_amount', '>', 0)))
             ->when($request->filled('search'), function ($q) use ($request) {
                 $term = trim($request->string('search'));
                 $like = $this->like($term);
@@ -35,7 +42,17 @@ class CustomerController extends Controller
             ->latest('id')
             ->paginate($this->perPage($request));
 
-        return $this->paginated($customers);
+        // Headline figures for the whole customer base (not just this page).
+        $all = fn () => Customer::query()->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')));
+        $tz = app(TenantContext::class)->tenant()->timezone;
+
+        return $this->paginated($customers, null, ['summary' => [
+            'total' => $all()->count(),
+            'new_this_month' => $all()->where('created_at', '>=', now($tz)->startOfMonth()->utc())->count(),
+            'with_open_jobs' => $all()->whereHas('jobs', fn ($j) => $j->whereIn('status', $open))->count(),
+            'with_dues' => $all()->whereHas('invoices', fn ($i) => $i->where('balance_amount', '>', 0))->count(),
+            'dues_total' => (int) Invoice::where('balance_amount', '>', 0)->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')))->sum('balance_amount'),
+        ]]);
     }
 
     public function store(Request $request): JsonResponse
@@ -51,7 +68,7 @@ class CustomerController extends Controller
             return $customer;
         });
 
-        return $this->created($customer->load(['products.product.brand', 'branch:id,name']), 'Customer created.');
+        return $this->created($customer->load(['products.product.brand', 'products.brand:id,name', 'products.category:id,name', 'branch:id,name']), 'Customer created.');
     }
 
     /** FR-4.4: full profile with products and complaint history. PII access is logged. */
@@ -59,11 +76,11 @@ class CustomerController extends Controller
     {
         $customer = Customer::with([
             'branch:id,name',
-            'products.product.brand:id,name', 'products.product.category:id,name', 'products.dealer:id,name',
+            'products.product.brand:id,name', 'products.product.category:id,name', 'products.dealer:id,name', 'products.brand:id,name', 'products.category:id,name',
         ])->findOrFail($id);
 
         $jobs = $customer->jobs()
-            ->with(['technician:id,name', 'complaintType:id,name', 'customerProduct.product:id,model_name', 'invoice:id,job_id,invoice_number,total_amount,balance_amount,payment_status'])
+            ->with(['technician:id,name', 'complaintType:id,name', 'customerProduct.product:id,model_name,brand_id', 'customerProduct.product.brand:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name', 'invoice:id,job_id,invoice_number,total_amount,balance_amount,payment_status'])
             ->latest('id')->limit(100)->get();
 
         $outstanding = (int) $customer->invoices()->sum('balance_amount');
@@ -85,7 +102,7 @@ class CustomerController extends Controller
         $customer = Customer::findOrFail($id);
         $product = $customer->products()->create($request->validate($this->productRules()));
 
-        return $this->created($product->load(['product.brand:id,name', 'dealer:id,name']), 'Product added.');
+        return $this->created($product->load(['product.brand:id,name', 'brand:id,name', 'category:id,name', 'dealer:id,name']), 'Product added.');
     }
 
     public function updateProduct(Request $request, int $id, int $productId): JsonResponse
@@ -93,7 +110,7 @@ class CustomerController extends Controller
         $product = CustomerProduct::where('customer_id', $id)->findOrFail($productId);
         $product->update($request->validate($this->productRules()));
 
-        return $this->ok($product->load(['product.brand:id,name', 'dealer:id,name']), 'Product updated.');
+        return $this->ok($product->load(['product.brand:id,name', 'brand:id,name', 'category:id,name', 'dealer:id,name']), 'Product updated.');
     }
 
     /** Data-subject export (NFR Data Privacy). */
@@ -139,6 +156,7 @@ class CustomerController extends Controller
             'phone' => [$req, 'string', 'regex:/^\+?[0-9]{10,15}$/'],
             'alt_phone' => ['nullable', 'string', 'regex:/^\+?[0-9]{10,15}$/'],
             'email' => ['nullable', 'email', 'max:150'],
+            'gstin' => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/'],
             'crm_id' => ['nullable', 'string', 'max:50', Rule::unique('customers', 'crm_id')->where('tenant_id', $tenantId)->ignore($customer?->id)],
             'address' => ['nullable', 'string', 'max:500'],
             'city' => ['nullable', 'string', 'max:100'],
@@ -156,6 +174,9 @@ class CustomerController extends Controller
 
         return [
             $prefix.'product_id' => ['nullable', 'integer', Rule::exists('products', 'id')->where('tenant_id', $tenantId)],
+            $prefix.'model_no' => ['nullable', 'string', 'max:150'],
+            $prefix.'brand_id' => ['nullable', 'integer', Rule::exists('brands', 'id')->where('tenant_id', $tenantId)],
+            $prefix.'category_id' => ['nullable', 'integer', Rule::exists('product_categories', 'id')->where('tenant_id', $tenantId)],
             $prefix.'serial_no' => ['nullable', 'string', 'max:100'],
             $prefix.'outdoor_serial_no' => ['nullable', 'string', 'max:100'],
             $prefix.'purchase_date' => ['nullable', 'date', 'before_or_equal:today'],

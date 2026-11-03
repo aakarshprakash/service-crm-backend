@@ -8,6 +8,8 @@ use App\Models\JobInventoryUsage;
 use App\Models\JobVisit;
 use App\Models\JobVoiceNote;
 use App\Models\ServiceJob;
+use App\Models\TechnicianStock;
+use App\Models\TechnicianStockMove;
 use App\Services\VisitService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -74,7 +76,32 @@ class VisitController extends Controller
         return $this->ok($job, 'Details saved.');
     }
 
-    /** Job, customer and product fields a technician may correct (FR-6.5). */
+    /** Asking the office to cancel an assigned job without starting a visit. */
+    public function requestCancel(Request $request, int $jobId): JsonResponse
+    {
+        $data = $request->validate(['reason' => ['required', 'string', 'min:10', 'max:500']], [
+            'reason.required' => 'Write why this job should be cancelled.',
+            'reason.min' => 'Write a clear reason (at least 10 characters) so the office can decide.',
+        ]);
+        $job = $this->visits->requestCancel(ServiceJob::findOrFail($jobId), $request->user(), trim($data['reason']));
+
+        return $this->ok($job, 'Sent to the office for approval.');
+    }
+
+    /** Parts allocated to me, and what happened to them (with the job each was used on). */
+    public function myParts(Request $request): JsonResponse
+    {
+        $id = $request->user()->id;
+
+        return $this->ok([
+            'stock' => TechnicianStock::where('technician_id', $id)->where('quantity', '>', 0)
+                ->with('item:id,code,name,type,unit_of_measure,unit_price')->get()->sortBy('item.name')->values(),
+            'moves' => TechnicianStockMove::where('technician_id', $id)->with(['item:id,code,name,unit_of_measure', 'job:id,crm_call_id'])
+                ->latest('id')->limit(30)->get(),
+        ]);
+    }
+
+    /** Job and product fields a technician may correct (FR-6.5). The customer's own details stay with the office. */
     private function callRules(): array
     {
         $tenantId = app(TenantContext::class)->id();
@@ -85,12 +112,16 @@ class VisitController extends Controller
             'complaint_summary_id' => ['nullable', 'integer', Rule::exists('complaint_summaries', 'id')->where('tenant_id', $tenantId)],
             'priority' => ['sometimes', Rule::in(['low', 'medium', 'high'])],
             'call_type' => ['sometimes', Rule::in(['crm_call', 'walk_in', 'referral', 'portal'])],
-            'address' => ['nullable', 'string', 'max:500'],
-            'city' => ['nullable', 'string', 'max:100'],
-            'pincode' => ['nullable', 'string', 'max:12'],
-            'alt_phone' => ['nullable', 'string', 'regex:/^\+?[0-9]{10,15}$/'],
             'serial_no' => ['nullable', 'string', 'max:100'],
             'outdoor_serial_no' => ['nullable', 'string', 'max:100'],
+            'model_no' => ['nullable', 'string', 'max:150'],
+            'category_id' => ['nullable', 'integer', Rule::exists('product_categories', 'id')->where('tenant_id', $tenantId)],
+            'brand_id' => ['nullable', 'integer', Rule::exists('brands', 'id')->where('tenant_id', $tenantId)],
+            'dealer_id' => ['nullable', 'integer', Rule::exists('dealers', 'id')->where('tenant_id', $tenantId)],
+            'purchase_date' => ['nullable', 'date', 'before_or_equal:today'],
+            'warranty_type' => ['nullable', Rule::in(['in_warranty', 'extended', 'amc', 'out_of_warranty'])],
+            'warranty_expiry' => ['nullable', 'date'],
+            'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],
         ];
     }
 
@@ -101,9 +132,10 @@ class VisitController extends Controller
     public function uploadImage(Request $request, int $id): JsonResponse
     {
         $data = $request->validate([
-            'type' => ['required', Rule::in(['bill', 'serial', 'complaint_part', 'new_part', 'other'])],
+            'type' => ['required', Rule::in(app(TenantContext::class)->tenant()->acceptedPhotoTypes())],
             'image' => ['required', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:25600', 'dimensions:max_width=12000,max_height=12000'],
         ], [
+            'type.in' => 'This photo section has been removed. Take the photo again under another section.',
             'image.max' => 'The photo is too large (over 25 MB). Retake it at a lower resolution.',
             'image.uploaded' => 'The photo could not be received. Check the connection and try again.',
         ]);
@@ -186,6 +218,7 @@ class VisitController extends Controller
             'quantity' => ['required', 'numeric', 'gt:0', 'max:100000', 'decimal:0,3'],
             'branch_id' => ['nullable', 'integer', Rule::exists('branches', 'id')->where('tenant_id', $tenantId)],
             'unit_price' => ['nullable', 'integer', 'min:0', 'max:100000000'],
+            'source' => ['nullable', Rule::in(['technician', 'branch'])],
         ]);
         $usage = $this->visits->addInventory($this->ownVisit($request, $id), $request->user(), $data);
 
@@ -205,9 +238,11 @@ class VisitController extends Controller
     {
         $tenantId = app(TenantContext::class)->id();
         $data = $request->validate([
-            'status' => ['required', Rule::in(['pending', 'completed', 'cancelled'])],
+            'status' => ['required', Rule::in(['pending', 'part_pending', 'completed', 'cancelled'])],
             'action_taken_id' => ['nullable', 'integer', 'required_if:status,completed'],
-            'service_summary' => ['required', 'string', 'max:2000'],
+            'service_summary' => ['required', 'string', 'max:2000', ...($request->input('status') === 'cancelled' ? ['min:10'] : [])],
+            'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],
+            'is_gst' => ['nullable', 'boolean'],
             'assisted_staff_id' => ['nullable', 'integer', Rule::exists('users', 'id')->where('tenant_id', $tenantId)],
             'labour_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'spare_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
@@ -218,7 +253,8 @@ class VisitController extends Controller
             'lng' => ['nullable', 'numeric', 'between:-180,180'],
         ], [
             'action_taken_id.required_if' => 'Select the action taken to mark the visit completed.',
-            'service_summary.required' => 'Enter a short service summary.',
+            'service_summary.required' => $request->input('status') === 'cancelled' ? 'Write why this job should be cancelled.' : 'Enter a short service summary.',
+            'service_summary.min' => 'Write a clear reason (at least 10 characters) so the office can decide.',
         ]);
 
         $result = $this->visits->complete($this->ownVisit($request, $id), $request->user(), $data);
@@ -226,7 +262,8 @@ class VisitController extends Controller
         return $this->ok($result, match ($data['status']) {
             'completed' => 'Visit completed.',
             'pending' => 'Visit saved as pending.',
-            default => 'Visit cancelled.',
+            'part_pending' => 'Visit saved as part pending.',
+            default => 'Visit closed. The office will review the cancellation.',
         });
     }
 

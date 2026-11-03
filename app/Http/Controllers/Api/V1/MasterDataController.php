@@ -8,6 +8,7 @@ use App\Models\Branch;
 use App\Models\Brand;
 use App\Models\ComplaintSummary;
 use App\Models\ComplaintType;
+use App\Models\CustomerProduct;
 use App\Models\Dealer;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
@@ -18,6 +19,7 @@ use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ServiceJob;
 use App\Models\ServiceLocation;
+use App\Models\Shift;
 use App\Models\UpiAccount;
 use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Model;
@@ -47,12 +49,14 @@ class MasterDataController extends Controller
         'upi-accounts' => UpiAccount::class,
         'leave-types' => LeaveType::class,
         'holidays' => Holiday::class,
+        'shifts' => Shift::class,
     ];
 
     /** All active lookups in one call for forms (cached per request by the client). */
     public function lookups(): JsonResponse
     {
         $active = fn (string $class, array $cols = ['id', 'name']) => $class::where('is_active', true)->orderBy($cols[1] ?? 'name')->get($cols);
+        $tenant = app(TenantContext::class)->tenant();
 
         return $this->ok([
             'branches' => $active(Branch::class),
@@ -67,6 +71,24 @@ class MasterDataController extends Controller
             'expense_categories' => $active(ExpenseCategory::class),
             'upi_accounts' => UpiAccount::where('is_active', true)->orderByDesc('is_default')->orderBy('name')->get(['id', 'name', 'vpa', 'payee_name', 'branch_id', 'is_default']),
             'leave_types' => LeaveType::where('is_active', true)->orderBy('name')->get(['id', 'name', 'code', 'annual_quota', 'is_paid']),
+            // Models typed on earlier units, most recent first, offered while typing a new one.
+            'model_suggestions' => CustomerProduct::query()->whereNotNull('model_no')->where('model_no', '!=', '')
+                ->toBase()->selectRaw('model_no, brand_id, MAX(id) as latest')->groupBy('model_no', 'brand_id')
+                ->orderByDesc('latest')->limit(500)->get(['model_no', 'brand_id'])
+                ->map(fn ($r) => ['model_no' => $r->model_no, 'brand_id' => $r->brand_id]),
+            'shifts' => Shift::where('is_active', true)->orderBy('start_time')->get(['id', 'name', 'start_time', 'end_time', 'grace_minutes', 'is_default']),
+            'photo_types' => $tenant->photoTypes(),
+            'photo_labels' => (object) $tenant->setting('photo_labels', []),
+            // Whether staff can choose GST / non-GST on a bill, and what a walk-in bill starts as.
+            'billing' => [
+                'gst_registered' => (bool) $tenant->gstin,
+                'walkin_bills' => $tenant->setting('gst.walkin_bills'),
+                'job_bills' => $tenant->setting('gst.job_bills'),
+            ],
+            'job_age' => [                'warning' => (int) $tenant->setting('jobs.age_warning'),
+                'old' => (int) $tenant->setting('jobs.age_old'),
+                'critical' => (int) $tenant->setting('jobs.age_critical'),
+            ],
         ]);
     }
 
@@ -108,6 +130,36 @@ class MasterDataController extends Controller
         }
 
         return $this->created($record);
+    }
+
+    /**
+     * Add a brand, product type or model straight from a form (e.g. a new job) by people who log calls
+     * but cannot manage master data. An existing record with the same name is returned instead of a duplicate.
+     */
+    public function quickAdd(Request $request, string $type): JsonResponse
+    {
+        abort_unless(in_array($type, ['brands', 'categories', 'products'], true), 404);
+        $tenantId = app(TenantContext::class)->id();
+        $exists = fn (string $t) => Rule::exists($t, 'id')->where('tenant_id', $tenantId);
+
+        if ($type === 'products') {
+            $data = $request->validate([
+                'model_name' => ['required', 'string', 'max:150'],
+                'brand_id' => ['required', 'integer', $exists('brands')],
+                'category_id' => ['nullable', 'integer', $exists('product_categories')],
+            ]);
+            $name = trim($data['model_name']);
+            $record = Product::where('brand_id', $data['brand_id'])->whereRaw('LOWER(model_name) = ?', [mb_strtolower($name)])->first()
+                ?? Product::create(['model_name' => $name] + $data);
+
+            return $this->created($record->load('brand:id,name'), $record->wasRecentlyCreated ? 'Model added.' : 'This model already exists – selected it.');
+        }
+
+        $name = trim($request->validate(['name' => ['required', 'string', 'max:100']])['name']);
+        $class = $this->model($type);
+        $record = $class::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->first() ?? $class::create(['name' => $name]);
+
+        return $this->created($record, $record->wasRecentlyCreated ? 'Added.' : 'Already exists – selected it.');
     }
 
     public function update(Request $request, string $type, int $id): JsonResponse
@@ -183,6 +235,15 @@ class MasterDataController extends Controller
         $sometimes = $record ? 'sometimes' : 'required';
 
         return match ($type) {
+            'shifts' => [
+                'name' => [$sometimes, 'string', 'max:60', $uniqueName],
+                'start_time' => [$sometimes, 'date_format:H:i'],
+                // Same-day shifts for now: punches are counted per calendar date, so overnight hours wouldn't add up.
+                'end_time' => [$sometimes, 'date_format:H:i', 'after:start_time'],
+                'grace_minutes' => ['nullable', 'integer', 'min:0', 'max:120'],
+                'is_default' => ['boolean'],
+                'is_active' => ['boolean'],
+            ],
             'products' => [
                 'model_name' => [$sometimes, 'string', 'max:150'],
                 'brand_id' => ['nullable', 'integer', $exists('brands')],

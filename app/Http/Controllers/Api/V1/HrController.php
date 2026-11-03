@@ -49,6 +49,18 @@ class HrController extends Controller
         if ($log->within_fence === false) {
             $message .= " You were {$log->distance_m} m from the office; this punch is flagged.";
         }
+        if ($data['type'] === 'in' && $log->shift_start) {
+            // Only the day's first punch in counts, and only on a working day: the day's own record decides.
+            $tenant = $this->tenant();
+            $today = CarbonImmutable::now($tenant->timezone)->toDateString();
+            $late = $this->attendance->days($tenant, collect([$user]), $today, $today)[$user->id][$today]['late_minutes'];
+            $isFirst = PunchLog::where('user_id', $user->id)->where('type', 'in')->where('id', '!=', $log->id)
+                ->where('created_at', '>=', CarbonImmutable::now($tenant->timezone)->startOfDay()->utc())->doesntExist();
+            if ($late > 0 && $isFirst) {
+                $by = $late < 60 ? "{$late} min" : intdiv($late, 60).'h'.($late % 60 ? ' '.($late % 60).'m' : '');
+                $message = "Punched in. You are {$by} late (shift starts {$log->shift_start}).";
+            }
+        }
 
         return $this->ok([
             'punch_status' => $user->punch_status, 'punched_at' => $user->punched_at,
@@ -152,6 +164,7 @@ class HrController extends Controller
             'absent' => $count(['absent']),
             'on_duty_now' => $users->where('punch_status', 'in')->count(),
             'outside_fence' => $rows->filter(fn ($r) => $r['day']['outside'])->count(),
+            'late' => $rows->filter(fn ($r) => $r['day']['late_minutes'] > 0)->count(),
         ]);
     }
 
@@ -167,7 +180,7 @@ class HrController extends Controller
             'dates' => array_keys($days[$users->first()?->id] ?? []),
             'rows' => $users->map(fn (User $u) => [
                 'user' => ['id' => $u->id, 'name' => $u->name, 'role' => $u->role->value, 'branch' => $u->branch?->name],
-                'days' => collect($days[$u->id])->map(fn ($d) => ['code' => $d['code'], 'status' => $d['status'], 'in' => $d['in'], 'out' => $d['out'], 'minutes' => $d['minutes'], 'outside' => $d['outside'], 'adjusted' => $d['adjusted'], 'note' => $d['note'] ?? $d['leave_type'] ?? $d['holiday']]),
+                'days' => collect($days[$u->id])->map(fn ($d) => ['code' => $d['code'], 'status' => $d['status'], 'in' => $d['in'], 'out' => $d['out'], 'minutes' => $d['minutes'], 'outside' => $d['outside'], 'adjusted' => $d['adjusted'], 'note' => $d['note'] ?? $d['leave_type'] ?? $d['holiday'], 'late_minutes' => $d['late_minutes'], 'early_minutes' => $d['early_minutes'], 'extra_minutes' => $d['extra_minutes']]),
                 'summary' => $this->attendance->summarize($days[$u->id]),
             ])->values(),
         ]);
@@ -276,6 +289,7 @@ class HrController extends Controller
             'components.*.amount' => ['required', 'integer', 'min:0', 'max:100000000'],
             'weekly_offs' => ['nullable', 'array', 'max:6'],
             'weekly_offs.*' => ['integer', 'between:1,7'],
+            'shift_id' => ['nullable', 'integer', Rule::exists('shifts', 'id')->where('tenant_id', app(TenantContext::class)->id())],
             'bank_name' => ['nullable', 'string', 'max:100'],
             'bank_account' => ['nullable', 'string', 'max:40'],
             'ifsc' => ['nullable', 'string', 'max:20'],

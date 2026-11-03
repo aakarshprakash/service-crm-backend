@@ -25,7 +25,7 @@ trait Auditable
 
     protected function auditAttributes(array $attributes): array
     {
-        $hidden = array_merge($this->getHidden(), ['password', 'remember_token', 'two_factor_secret', 'gateway_credentials']);
+        $hidden = array_merge($this->getHidden(), ['password', 'remember_token', 'two_factor_secret', 'gateway_credentials', 'mail_credentials']);
 
         return array_diff_key($attributes, array_flip($hidden));
     }

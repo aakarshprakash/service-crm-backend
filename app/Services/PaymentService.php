@@ -8,7 +8,7 @@ use App\Models\Payment;
 use App\Models\Tenant;
 use App\Services\Payments\PaymentGatewayManager;
 use App\Support\Money;
-use App\Support\Sequence;
+use App\Support\DocumentNumber;
 use App\Support\TenantContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -52,7 +52,7 @@ class PaymentService
                 'job_visit_id' => $meta['job_visit_id'] ?? null,
                 'amount' => $amount,
                 'method' => $method,
-                'receipt_number' => Sequence::formatted($invoice->tenant_id, 'receipt', $tenant->setting('receipt_prefix', 'RCPT')),
+                'receipt_number' => DocumentNumber::next($tenant, 'receipt'),
                 'reference_no' => $meta['reference_no'] ?? null,
                 'status' => 'success',
                 'collected_by' => $meta['collected_by'] ?? auth()->id(),
@@ -148,7 +148,7 @@ class PaymentService
                 'gateway_txn_id' => $txnId,
                 'paid_at' => $status === 'success' ? now() : null,
                 'receipt_number' => $status === 'success'
-                    ? Sequence::formatted($payment->tenant_id, 'receipt', $tenant->setting('receipt_prefix', 'RCPT'))
+                    ? DocumentNumber::next($tenant, 'receipt')
                     : null,
             ]);
             Invoice::findOrFail($payment->invoice_id)->refreshPaymentTotals();

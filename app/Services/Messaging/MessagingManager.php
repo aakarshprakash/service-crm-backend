@@ -17,6 +17,10 @@ class MessagingManager
 
     private function make(string $channel): MessagingProviderInterface
     {
+        // Email always goes through SMTP (the company's own account or the platform's).
+        if ($channel === 'email') {
+            return new EmailProvider;
+        }
         $driver = config("services.messaging.$channel", 'log');
 
         return match ("$channel:$driver") {

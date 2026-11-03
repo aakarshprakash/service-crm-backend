@@ -54,6 +54,7 @@ class ReportService
         'cash-book' => ['Cash Book', 'reports.financial', 'Cash received, cash paid out and deposits, with running balance.'],
         'bank-book' => ['Bank Book', 'reports.financial', 'UPI, cheque, bank and online receipts, non-cash payments and transfers, with running balance.'],
         'receipts' => ['Receipts Register', 'reports.financial', 'Every payment received, with receipt number, method and who collected it.'],
+        'gst-sales' => ['GST Sales Register', 'reports.financial', 'Tax invoices with taxable value, CGST, SGST and IGST (B2B and B2C) for GST returns.'],
         'attendance' => ['Attendance Summary', 'hr.view', 'Present, leave, absent and hours per staff member for the period.'],
         'leave' => ['Leave Register', 'hr.view', 'Leave requests by staff member, type, dates and status.'],
         'payroll' => ['Payroll Summary', 'payroll.manage', 'Gross, deductions, loss of pay and net pay per payslip for the months in the period.'],
@@ -133,21 +134,26 @@ class ReportService
             ->when($branch, fn ($q, $v) => $q->where('branch_id', $v))
             ->selectRaw('DATE(expense_date) as d, SUM(amount) as t')->groupBy('d')->pluck('t', 'd');
 
-        $rows = collect(CarbonPeriod::create($from, $to))->map(function ($day) use ($bySource, $expenseByDay) {
+        $gstByDay = $books->gstByDay($start, $end, $this->tenant->timezone, $branch);
+
+        $rows = collect(CarbonPeriod::create($from, $to))->map(function ($day) use ($bySource, $expenseByDay, $gstByDay) {
             $d = $day->format('Y-m-d');
             $src = ($bySource[$d] ?? collect())->pluck('t', 'source');
             $job = (int) ($src['job'] ?? 0);
             $walk = (int) ($src['walk_in'] ?? 0);
+            $gst = (int) ($gstByDay[$d] ?? 0);
             $exp = (int) ($expenseByDay[$d] ?? 0);
+            $net = $job + $walk - $gst - $exp;
 
-            return ['date' => $d, 'service' => $job, 'walk_in' => $walk, 'income' => $job + $walk, 'expense' => $exp, 'net' => $job + $walk - $exp, '_flag' => $job + $walk - $exp < 0];
+            return ['date' => $d, 'service' => $job, 'walk_in' => $walk, 'income' => $job + $walk, 'gst' => $gst, 'expense' => $exp, 'net' => $net, '_flag' => $net < 0];
         })->filter(fn ($r) => $r['income'] || $r['expense'])->values()->take($limit ?? PHP_INT_MAX);
 
         return new ReportResult([
             'date' => ['Date', 'date'], 'service' => ['Service income', 'money'], 'walk_in' => ['Walk-in income', 'money'],
-            'income' => ['Total income', 'money'], 'expense' => ['Expenses', 'money'], 'net' => ['Net', 'money'],
+            'income' => ['Total received', 'money'], 'gst' => ['GST in receipts', 'money'], 'expense' => ['Expenses', 'money'], 'net' => ['Net', 'money'],
         ], $rows->all(), [
-            'Income' => $this->money($s['income']),
+            'Received' => $this->money($s['income']),
+            'Less GST collected' => $this->money($s['gst']),
             'Expenses' => $this->money($s['expense']),
             'Net profit' => $this->money($s['net']),
             'Cash in minus cash out' => $this->money($s['cash']['net']),
@@ -201,6 +207,40 @@ class ReportService
             'Parts sold' => $this->money($rows->sum('parts')),
             'Discounts' => $this->money($rows->sum('discount')),
             'Outstanding' => $this->money($rows->sum('balance')),
+        ]);
+    }
+
+    private function gstSales(?int $limit): ReportResult
+    {
+        $q = Invoice::query()->where('invoices.is_gst', true)
+            ->leftJoin('customers as c', 'c.id', '=', 'invoices.customer_id')
+            ->tap(fn ($q) => $this->dateRange($q, 'invoices.generated_at'))
+            ->when($this->f('branch_id'), fn ($q, $v) => $q->where('invoices.branch_id', $v))
+            ->orderBy('invoices.generated_at')->orderBy('invoices.id');
+        $totals = (clone $q)->reorder()->selectRaw('COUNT(*) as n, SUM(invoices.taxable_amount) as taxable, SUM(invoices.cgst_amount) as cgst, SUM(invoices.sgst_amount) as sgst, SUM(invoices.igst_amount) as igst, SUM(invoices.total_amount) as total')->first();
+
+        $rows = $q->limit($limit ?? PHP_INT_MAX)->get([
+            'invoices.generated_at', 'invoices.invoice_number', 'c.name as customer', 'invoices.customer_gstin', 'invoices.place_of_supply',
+            'invoices.taxable_amount', 'invoices.cgst_amount', 'invoices.sgst_amount', 'invoices.igst_amount', 'invoices.total_amount',
+        ])->map(fn ($r) => [
+            'date' => $this->local($r->generated_at, 'Y-m-d'), 'invoice_number' => $r->invoice_number, 'customer' => $r->customer,
+            'gstin' => $r->customer_gstin, 'type' => $r->customer_gstin ? 'B2B' : 'B2C', 'place_of_supply' => $r->place_of_supply,
+            'taxable' => (int) $r->taxable_amount, 'cgst' => (int) $r->cgst_amount, 'sgst' => (int) $r->sgst_amount, 'igst' => (int) $r->igst_amount,
+            'total' => (int) $r->total_amount,
+        ]);
+
+        return new ReportResult([
+            'date' => ['Date', 'date'], 'invoice_number' => ['Invoice'], 'customer' => ['Customer'], 'gstin' => ['Customer GSTIN'], 'type' => ['Type'],
+            'place_of_supply' => ['Place of supply'], 'taxable' => ['Taxable value', 'money'], 'cgst' => ['CGST', 'money'], 'sgst' => ['SGST', 'money'],
+            'igst' => ['IGST', 'money'], 'total' => ['Invoice value', 'money'],
+        ], $rows->all(), [
+            'Invoices' => (int) $totals->n,
+            'Taxable value' => $this->money((int) $totals->taxable),
+            'CGST' => $this->money((int) $totals->cgst),
+            'SGST' => $this->money((int) $totals->sgst),
+            'IGST' => $this->money((int) $totals->igst),
+            'Total tax' => $this->money((int) $totals->cgst + (int) $totals->sgst + (int) $totals->igst),
+            'Invoice value' => $this->money((int) $totals->total),
         ]);
     }
 
@@ -273,15 +313,17 @@ class ReportService
             return [
                 'name' => $u->name, 'role' => $u->role->label(), 'branch' => $u->branch?->name, 'present' => $s['present'],
                 'paid_leave' => $s['paid_leave'], 'unpaid_leave' => $s['unpaid_leave'], 'absent' => $s['absent'], 'holidays' => $s['holidays'],
-                'weekly_offs' => $s['weekly_offs'], 'hours' => round($s['minutes'] / 60, 1), 'outside' => $outside, '_flag' => $s['absent'] >= 3,
+                'weekly_offs' => $s['weekly_offs'], 'hours' => round($s['minutes'] / 60, 1), 'late_days' => $s['late_days'], 'late_hours' => round($s['late_minutes'] / 60, 1),
+                'early_days' => $s['early_days'], 'extra_hours' => round($s['extra_minutes'] / 60, 1), 'outside' => $outside, '_flag' => $s['absent'] >= 3,
             ];
         });
 
         return new ReportResult([
             'name' => ['Staff'], 'role' => ['Role'], 'branch' => ['Branch'], 'present' => ['Present', 'quantity'], 'paid_leave' => ['Paid leave', 'quantity'],
             'unpaid_leave' => ['Unpaid leave', 'quantity'], 'absent' => ['Absent', 'quantity'], 'holidays' => ['Holidays', 'number'],
-            'weekly_offs' => ['Weekly offs', 'number'], 'hours' => ['Hours worked', 'quantity'], 'outside' => ['Punches outside fence', 'number'],
-        ], $rows->all(), ['Staff' => $rows->count(), 'Total absent days' => $rows->sum('absent')]);
+            'weekly_offs' => ['Weekly offs', 'number'], 'hours' => ['Hours worked', 'quantity'], 'late_days' => ['Late days', 'number'], 'late_hours' => ['Hours late', 'quantity'],
+            'early_days' => ['Left early', 'number'], 'extra_hours' => ['Extra hours', 'quantity'], 'outside' => ['Punches outside fence', 'number'],
+        ], $rows->all(), ['Staff' => $rows->count(), 'Total absent days' => $rows->sum('absent'), 'Total late days' => $rows->sum('late_days')]);
     }
 
     private function leave(?int $limit): ReportResult
@@ -400,7 +442,7 @@ class ReportService
 
         $rows = $q->limit($limit ?? PHP_INT_MAX)->get([
             'service_jobs.crm_call_id', 'service_jobs.created_at', 'customers.name as customer', 'customers.phone',
-            'complaint_types.name as complaint', 'service_jobs.priority', 'service_jobs.call_type', 'service_jobs.status',
+            'complaint_types.name as complaint', 'service_jobs.product_category', 'service_jobs.customer_satisfaction_code', 'service_jobs.priority', 'service_jobs.call_type', 'service_jobs.status',
             't.name as technician', 'branches.name as branch', 'service_jobs.scheduled_at', 'service_jobs.completed_at', 'service_jobs.cancelled_at',
         ])->map(fn ($r) => [
             'crm_call_id' => $r->crm_call_id,
@@ -408,6 +450,8 @@ class ReportService
             'customer' => $r->customer,
             'phone' => $r->phone,
             'complaint' => $r->complaint,
+            'product_category' => $r->product_category,
+            'customer_satisfaction_code' => $r->customer_satisfaction_code,
             'priority' => ucfirst($r->priority),
             'call_type' => str_replace('_', ' ', $r->call_type),
             'status' => str_replace('_', ' ', $r->status->value),
@@ -420,13 +464,13 @@ class ReportService
 
         return new ReportResult([
             'crm_call_id' => ['Call ID'], 'created_at' => ['Created', 'datetime'], 'customer' => ['Customer'], 'phone' => ['Phone'],
-            'complaint' => ['Complaint'], 'priority' => ['Priority'], 'call_type' => ['Call Type'], 'status' => ['Status'],
+            'complaint' => ['Complaint'], 'product_category' => ['Product category'], 'customer_satisfaction_code' => ['Customer Satisfaction Code'], 'priority' => ['Priority'], 'call_type' => ['Call Type'], 'status' => ['Status'],
             'technician' => ['Technician'], 'branch' => ['Branch'], 'scheduled_at' => ['Scheduled', 'datetime'],
             'completed_at' => ['Completed', 'datetime'], 'age_days' => ['Age (days)', 'number'],
         ], $rows->all(), [
             'Total jobs' => array_sum($summary->all()),
             'Open' => (int) ($summary['open'] ?? 0), 'In progress' => (int) ($summary['in_progress'] ?? 0),
-            'Pending' => (int) ($summary['pending'] ?? 0), 'Completed' => (int) ($summary['completed'] ?? 0),
+            'Pending' => (int) ($summary['pending'] ?? 0), 'Part pending' => (int) ($summary['part_pending'] ?? 0), 'Cancellation requested' => (int) ($summary['cancel_requested'] ?? 0), 'Completed' => (int) ($summary['completed'] ?? 0),
             'Cancelled' => (int) ($summary['cancelled'] ?? 0),
         ]);
     }
@@ -441,7 +485,7 @@ class ReportService
         $ids = $techs->pluck('id');
 
         $jobs = ServiceJob::whereIn('assigned_technician_id', $ids)->whereBetween('created_at', [$from, $to])
-            ->selectRaw("assigned_technician_id as id, COUNT(*) as assigned, SUM(status = 'completed') as completed, SUM(status IN ('open','in_progress','pending')) as open_jobs")
+            ->selectRaw("assigned_technician_id as id, COUNT(*) as assigned, SUM(status = 'completed') as completed, SUM(status IN ('open','in_progress','pending','part_pending','cancel_requested')) as open_jobs")
             ->groupBy('assigned_technician_id')->get()->keyBy('id');
         $visits = JobVisit::whereIn('technician_id', $ids)->whereBetween('start_time', [$from, $to])->whereNotNull('end_time')
             ->selectRaw('technician_id as id, COUNT(*) as visits, AVG(duration_seconds) as avg_duration, SUM(total_charge) as billed')

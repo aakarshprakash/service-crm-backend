@@ -133,6 +133,7 @@ Route::prefix('v1')->group(function () {
 
         // Master data (§5.14)
         Route::get('master/lookups', [MasterDataController::class, 'lookups'])->middleware('can:master.view');
+        Route::post('master/quick/{type}', [MasterDataController::class, 'quickAdd'])->middleware(['can:master.quick_add', 'throttle:30,1']);
         Route::middleware('can:master.manage')->group(function () {
             Route::get('master/{type}', [MasterDataController::class, 'index']);
             Route::post('master/{type}', [MasterDataController::class, 'store']);
@@ -160,8 +161,16 @@ Route::prefix('v1')->group(function () {
         Route::middleware('can:jobs.view')->group(function () {
             Route::get('jobs', [JobController::class, 'index']);
             Route::get('jobs/counts', [JobController::class, 'counts']);
+            Route::get('jobs/quick-counts', [JobController::class, 'quickCounts']);
+            Route::get('jobs/location-analysis', [JobController::class, 'locationAnalysis']);
             Route::get('jobs/calendar', [JobController::class, 'calendar']);
             Route::get('jobs/{id}', [JobController::class, 'show'])->whereNumber('id');
+            Route::get('jobs/{id}/job-card', [JobController::class, 'jobCard'])->whereNumber('id');
+            Route::post('jobs/{id}/notes', [JobController::class, 'addNote'])->whereNumber('id')->middleware('throttle:30,1');
+        });
+        Route::middleware('can:jobs.approve_cancel')->group(function () {
+            Route::post('jobs/{id}/cancel/approve', [JobController::class, 'approveCancel'])->whereNumber('id');
+            Route::post('jobs/{id}/cancel/reject', [JobController::class, 'rejectCancel'])->whereNumber('id');
         });
         Route::middleware('can:jobs.manage')->group(function () {
             Route::post('jobs', [JobController::class, 'store']);
@@ -170,6 +179,8 @@ Route::prefix('v1')->group(function () {
             Route::post('jobs/{id}/auto-assign', [JobController::class, 'autoAssign'])->whereNumber('id');
             Route::patch('jobs/{id}/reschedule', [JobController::class, 'reschedule'])->whereNumber('id');
             Route::post('jobs/{id}/cancel', [JobController::class, 'cancel'])->whereNumber('id');
+            Route::post('jobs/{id}/part-pending', [JobController::class, 'partPending'])->whereNumber('id');
+            Route::post('jobs/{id}/part-received', [JobController::class, 'partReceived'])->whereNumber('id');
             Route::post('jobs/{id}/follow-up', [JobController::class, 'followUp'])->whereNumber('id');
             Route::post('jobs/{id}/location', [JobLocationController::class, 'set'])->whereNumber('id')->middleware('throttle:30,1');
             Route::post('jobs/{id}/location-request', [JobLocationController::class, 'requestLink'])->whereNumber('id');
@@ -179,6 +190,9 @@ Route::prefix('v1')->group(function () {
         Route::middleware('can:visits.execute')->group(function () {
             Route::post('jobs/{id}/visits/start', [VisitController::class, 'start'])->whereNumber('id');
             Route::patch('jobs/{id}/details', [VisitController::class, 'prepare'])->whereNumber('id');
+            Route::post('jobs/{id}/cancel-request', [VisitController::class, 'requestCancel'])->whereNumber('id');
+            Route::post('jobs/{id}/customer-location', [JobLocationController::class, 'fromJob'])->whereNumber('id');
+            Route::get('my/parts', [VisitController::class, 'myParts']);
             Route::get('visits/active', [VisitController::class, 'active']);
             Route::get('visits/{id}', [VisitController::class, 'show'])->whereNumber('id');
             Route::patch('visits/{id}', [VisitController::class, 'update'])->whereNumber('id');
@@ -288,6 +302,10 @@ Route::prefix('v1')->group(function () {
             Route::post('inventory/stock-in', [InventoryController::class, 'stockIn']);
             Route::post('inventory/transfer', [InventoryController::class, 'transfer']);
             Route::post('inventory/adjust', [InventoryController::class, 'adjust']);
+            Route::get('inventory/technician-stock', [InventoryController::class, 'technicianStock']);
+            Route::get('inventory/technician-moves', [InventoryController::class, 'technicianMoves']);
+            Route::post('inventory/technician-stock/allocate', [InventoryController::class, 'allocate']);
+            Route::post('inventory/technician-stock/return', [InventoryController::class, 'returnAllocation']);
             Route::get('inventory/transactions', [InventoryController::class, 'transactions']);
             Route::get('suppliers', [InventoryController::class, 'suppliers']);
             Route::post('suppliers', [InventoryController::class, 'storeSupplier']);
@@ -295,6 +313,7 @@ Route::prefix('v1')->group(function () {
         });
 
         // Invoices & payments (§5.10)
+        Route::post('invoices/{id}/bill-type', [InvoiceController::class, 'changeBillType'])->whereNumber('id')->middleware('can:invoices.change_bill_type');
         Route::middleware('can:invoices.view')->group(function () {
             Route::get('invoices', [InvoiceController::class, 'index']);
             Route::get('invoices/{id}', [InvoiceController::class, 'show'])->whereNumber('id');
@@ -342,6 +361,9 @@ Route::prefix('v1')->group(function () {
             Route::put('company', [SettingsController::class, 'updateCompany']);
             Route::put('preferences', [SettingsController::class, 'updateSettings']);
             Route::put('gateway', [SettingsController::class, 'updateGateway']);
+            Route::put('email', [SettingsController::class, 'updateEmail']);
+            Route::get('invoice-preview', [SettingsController::class, 'invoicePreview']);
+            Route::post('email/test', [SettingsController::class, 'testEmail'])->middleware('throttle:5,1');
             Route::post('logo', [SettingsController::class, 'uploadLogo']);
             Route::get('templates', [SettingsController::class, 'templates']);
             Route::put('templates', [SettingsController::class, 'saveTemplate']);

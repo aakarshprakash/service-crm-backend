@@ -219,11 +219,14 @@ class LedgerService
             'expenses' => $categories->map(fn ($c) => $line($c, (int) ($current['expense_by_category'][$c] ?? 0), (int) ($previous['expense_by_category'][$c] ?? 0)))
                 ->sortByDesc('current')->values()->all(),
             'total_income' => ['current' => $current['income'], 'previous' => $previous['income']],
+            // GST inside the receipts belongs to the government: shown separately and left out of profit.
+            'gst' => ['current' => $current['gst'], 'previous' => $previous['gst']],
+            'net_income' => ['current' => $current['income'] - $current['gst'], 'previous' => $previous['income'] - $previous['gst']],
             'total_expense' => ['current' => $current['expense'], 'previous' => $previous['expense']],
             'net' => ['current' => $current['net'], 'previous' => $previous['net']],
             'margin' => [
-                'current' => $current['income'] ? round($current['net'] / $current['income'] * 100, 1) : null,
-                'previous' => $previous['income'] ? round($previous['net'] / $previous['income'] * 100, 1) : null,
+                'current' => $current['income'] - $current['gst'] ? round($current['net'] / ($current['income'] - $current['gst']) * 100, 1) : null,
+                'previous' => $previous['income'] - $previous['gst'] ? round($previous['net'] / ($previous['income'] - $previous['gst']) * 100, 1) : null,
             ],
         ];
     }

@@ -12,7 +12,7 @@ class PunchLog extends Model
 
     public const UPDATED_AT = null;
 
-    protected $fillable = ['user_id', 'type', 'lat', 'lng', 'accuracy', 'branch_id', 'distance_m', 'within_fence', 'source', 'created_at'];
+    protected $fillable = ['user_id', 'type', 'lat', 'lng', 'accuracy', 'branch_id', 'distance_m', 'within_fence', 'source', 'shift_name', 'shift_start', 'shift_end', 'shift_grace', 'created_at'];
 
     protected function casts(): array
     {

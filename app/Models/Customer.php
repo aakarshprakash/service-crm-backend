@@ -13,7 +13,7 @@ class Customer extends Model
 {
     use Auditable, BelongsToTenant, SoftDeletes;
 
-    protected $fillable = ['branch_id', 'crm_id', 'name', 'phone', 'alt_phone', 'email', 'address', 'city', 'state', 'pincode', 'lat', 'lng', 'location_updated_at', 'location_source'];
+    protected $fillable = ['branch_id', 'crm_id', 'name', 'phone', 'alt_phone', 'email', 'gstin', 'address', 'city', 'state', 'pincode', 'lat', 'lng', 'location_updated_at', 'location_source'];
 
     protected function casts(): array
     {

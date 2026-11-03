@@ -65,6 +65,22 @@ class JobLocationController extends Controller
         return $this->ok(['link' => $link, 'message' => $text, 'phone' => $job->customer?->phone], ($data['send'] ?? false) ? 'Location request sent to the customer.' : '');
     }
 
+    /** Technician on site, before any visit has started: use the phone's current position. */
+    public function fromJob(Request $request, int $jobId): JsonResponse
+    {
+        $data = $request->validate([
+            'lat' => ['required', 'numeric', 'between:-90,90'],
+            'lng' => ['required', 'numeric', 'between:-180,180'],
+        ]);
+        $job = ServiceJob::with('customer')->where('assigned_technician_id', $request->user()->id)->findOrFail($jobId);
+        if ($job->status->isFinal()) {
+            throw ValidationException::withMessages(['job' => 'This job is closed.']);
+        }
+        $this->store($job, ['lat' => (float) $data['lat'], 'lng' => (float) $data['lng']], 'technician', $request->user());
+
+        return $this->ok($job->customer->only(['id', 'lat', 'lng', 'location_updated_at', 'location_source']), 'Customer location saved.');
+    }
+
     /** Technician on site: use the phone's current position. */
     public function fromSite(Request $request, int $visitId): JsonResponse
     {

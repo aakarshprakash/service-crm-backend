@@ -7,6 +7,9 @@ use App\Models\InventoryStock;
 use App\Models\InventoryTransaction;
 use App\Models\JobInventoryUsage;
 use App\Models\JobVisit;
+use App\Models\TechnicianStock;
+use App\Models\TechnicianStockMove;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -82,6 +85,7 @@ class InventoryService
                 'job_visit_id' => $visit->id,
                 'item_id' => $item->id,
                 'branch_id' => $branchId,
+                'from_technician_stock' => false,
                 'quantity' => $quantity,
                 'unit_price' => $price,
                 'total_price' => (int) round($quantity * $price),
@@ -93,6 +97,70 @@ class InventoryService
             ]);
 
             return $usage;
+        });
+    }
+
+    /** The office hands parts to a technician: they leave the branch's stock and join the technician's. */
+    public function allocateToTechnician(User $technician, int $branchId, InventoryItem $item, float $quantity, ?string $remarks, int $userId): TechnicianStock
+    {
+        return DB::transaction(function () use ($technician, $branchId, $item, $quantity, $remarks, $userId) {
+            $branchStock = $this->lockedStock($branchId, $item->id);
+            $this->move($branchStock, $item, -$quantity, 'allocated', [
+                'unit_cost' => $branchStock->avg_unit_cost, 'reference_type' => 'technician', 'reference_id' => $technician->id,
+                'remarks' => $remarks ?: "Allocated to {$technician->name}", 'created_by' => $userId,
+            ]);
+            $stock = $this->lockedTechnicianStock($technician->id, $item->id, $branchId);
+            $stock->branch_id = $branchId;
+            $this->moveTechnicianStock($stock, $quantity, 'allocated', ['branch_id' => $branchId, 'remarks' => $remarks, 'created_by' => $userId]);
+
+            return $stock;
+        });
+    }
+
+    /** Unused parts handed back: they rejoin a branch's stock. */
+    public function returnFromTechnician(User $technician, int $branchId, InventoryItem $item, float $quantity, ?string $remarks, int $userId): TechnicianStock
+    {
+        return DB::transaction(function () use ($technician, $branchId, $item, $quantity, $remarks, $userId) {
+            $stock = $this->lockedTechnicianStock($technician->id, $item->id, $branchId);
+            $this->moveTechnicianStock($stock, -$quantity, 'returned', ['branch_id' => $branchId, 'remarks' => $remarks, 'created_by' => $userId], $item);
+            $this->move($this->lockedStock($branchId, $item->id), $item, $quantity, 'allocation_return', [
+                'reference_type' => 'technician', 'reference_id' => $technician->id,
+                'remarks' => $remarks ?: "Returned by {$technician->name}", 'created_by' => $userId,
+            ]);
+
+            return $stock;
+        });
+    }
+
+    /** How much of an item the technician is holding right now. */
+    public function technicianHolds(int $technicianId, int $itemId): float
+    {
+        return (float) (TechnicianStock::where(['technician_id' => $technicianId, 'item_id' => $itemId])->value('quantity') ?? 0);
+    }
+
+    /** Technician uses a part allocated to them: the branch's stock already went down at allocation. */
+    public function consumeFromTechnician(JobVisit $visit, InventoryItem $item, int $technicianId, float $quantity, ?int $unitPrice, int $userId): JobInventoryUsage
+    {
+        return DB::transaction(function () use ($visit, $item, $technicianId, $quantity, $unitPrice, $userId) {
+            $stock = TechnicianStock::where(['technician_id' => $technicianId, 'item_id' => $item->id])->lockForUpdate()->first();
+            if (! $stock) {
+                throw ValidationException::withMessages(['quantity' => "{$item->name} is not allocated to you."]);
+            }
+            $this->moveTechnicianStock($stock, -$quantity, 'used', [
+                'branch_id' => $stock->branch_id, 'job_id' => $visit->job_id, 'job_visit_id' => $visit->id, 'created_by' => $userId,
+            ], $item);
+            $price = $unitPrice ?? $item->unit_price;
+
+            return JobInventoryUsage::create([
+                'job_id' => $visit->job_id,
+                'job_visit_id' => $visit->id,
+                'item_id' => $item->id,
+                'branch_id' => $stock->branch_id,
+                'from_technician_stock' => true,
+                'quantity' => $quantity,
+                'unit_price' => $price,
+                'total_price' => (int) round($quantity * $price),
+            ]);
         });
     }
 
@@ -109,11 +177,20 @@ class InventoryService
         });
     }
 
-    /** Undo a usage line while the visit is still open (returns stock). */
-    public function returnUsage(JobInventoryUsage $usage, int $userId): void
+    /** Undo a usage line while the visit is still open (returns stock to wherever it came from). */
+    public function returnUsage(JobInventoryUsage $usage, int $technicianId, int $userId): void
     {
-        DB::transaction(function () use ($usage, $userId) {
+        DB::transaction(function () use ($usage, $technicianId, $userId) {
             $item = InventoryItem::findOrFail($usage->item_id);
+            if ($usage->from_technician_stock) {
+                $this->moveTechnicianStock($this->lockedTechnicianStock($technicianId, $usage->item_id, $usage->branch_id), $usage->quantity, 'usage_undone', [
+                    'branch_id' => $usage->branch_id, 'job_id' => $usage->job_id, 'job_visit_id' => $usage->job_visit_id, 'created_by' => $userId,
+                    'remarks' => 'Removed from visit',
+                ]);
+                $usage->delete();
+
+                return;
+            }
             $this->move($this->lockedStock($usage->branch_id, $usage->item_id), $item, $usage->quantity, 'return', [
                 'reference_type' => 'job_visit', 'reference_id' => $usage->job_visit_id, 'created_by' => $userId,
                 'remarks' => 'Removed from visit',
@@ -134,6 +211,35 @@ class InventoryService
         InventoryStock::firstOrCreate(['branch_id' => $branchId, 'item_id' => $itemId], ['quantity_available' => 0]);
 
         return InventoryStock::where(['branch_id' => $branchId, 'item_id' => $itemId])->lockForUpdate()->firstOrFail();
+    }
+
+    private function lockedTechnicianStock(int $technicianId, int $itemId, int $branchId): TechnicianStock
+    {
+        TechnicianStock::firstOrCreate(['technician_id' => $technicianId, 'item_id' => $itemId], ['branch_id' => $branchId, 'quantity' => 0]);
+
+        return TechnicianStock::where(['technician_id' => $technicianId, 'item_id' => $itemId])->lockForUpdate()->firstOrFail();
+    }
+
+    private function moveTechnicianStock(TechnicianStock $stock, float $delta, string $type, array $meta, ?InventoryItem $item = null): void
+    {
+        $delta = round($delta, 3);
+        $balance = round($stock->quantity + $delta, 3);
+        if ($balance < 0) {
+            $item ??= InventoryItem::findOrFail($stock->item_id);
+            throw ValidationException::withMessages([
+                'quantity' => sprintf('Only %s %s of %s is allocated to this technician.', rtrim(rtrim(number_format($stock->quantity, 3, '.', ''), '0'), '.'), $item->unit_of_measure, $item->name),
+            ]);
+        }
+        $stock->quantity = $balance;
+        $stock->save();
+
+        TechnicianStockMove::create([
+            'technician_id' => $stock->technician_id,
+            'item_id' => $stock->item_id,
+            'type' => $type,
+            'quantity' => $delta,
+            'balance_after' => $balance,
+        ] + $meta);
     }
 
     private function move(InventoryStock $stock, InventoryItem $item, float $delta, string $type, array $meta): InventoryTransaction
@@ -164,7 +270,7 @@ class InventoryService
         if ($delta < 0 && $item->reorder_level > 0 && $balance <= $item->reorder_level && ! $stock->low_stock_alerted_at) {
             $stock->forceFill(['low_stock_alerted_at' => now()])->save();
             $branch = $stock->branch()->value('name');
-            DB::afterCommit(fn () => $this->notifications->notifyRoles(['admin', 'accountant'], 'low_stock', 'Low stock alert',
+            DB::afterCommit(fn () => $this->notifications->notifyRoles(['admin', 'accountant', 'store_keeper'], 'low_stock', 'Low stock alert',
                 "{$item->name} ({$item->code}) at {$branch} is down to {$balance} {$item->unit_of_measure} (reorder level {$item->reorder_level}).",
                 ['item_id' => $item->id, 'branch_id' => $stock->branch_id]));
         }

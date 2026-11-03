@@ -33,6 +33,7 @@ class WalkInBillController extends Controller
             'items.*.unit_price' => ['required_if:items.*.type,service', 'nullable', 'integer', 'min:0', 'max:100000000'],
             'discount' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'notes' => ['nullable', 'string', 'max:500'],
+            'is_gst' => ['nullable', 'boolean'],
             'payment_method' => ['nullable', Rule::in(['cash', 'upi', 'cheque', 'bank_transfer', 'credit'])],
             'amount_paid' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'reference_no' => ['nullable', 'string', 'max:100', Rule::requiredIf(fn () => in_array($request->input('payment_method'), ['cheque', 'bank_transfer'], true) && (int) $request->input('amount_paid') > 0)],
