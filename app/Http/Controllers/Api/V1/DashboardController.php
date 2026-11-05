@@ -52,11 +52,13 @@ class DashboardController extends Controller
     {
         $user = $request->user();
         $tz = app(TenantContext::class)->tenant()->timezone;
-        $counts = ServiceJob::where('assigned_technician_id', $user->id)
+        // Same jobs as the app's list: closed ones drop out after the days set in Settings.
+        $counts = ServiceJob::where('assigned_technician_id', $user->id)->closedRecently()
             ->selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status');
 
         $today = ServiceJob::where('assigned_technician_id', $user->id)
             ->whereIn('status', ['open', 'pending', 'in_progress'])
+            ->withExists('visits')
             ->where(fn ($q) => $q->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()])
                 ->orWhere('scheduled_at', '<', now($tz)->startOfDay()->utc()))
             ->with([
@@ -110,6 +112,7 @@ class DashboardController extends Controller
             'branch' => $branch ? ['name' => $branch->name, 'lat' => $branch->lat, 'lng' => $branch->lng, 'radius' => $branch->geofence_radius] : null,
             'require_location' => (bool) $tenant->setting('attendance.require_location', false),
             'require_punch_in' => (bool) $tenant->setting('jobs.require_punch_in', true),
+            'auto_punch_out_at' => $tenant->setting('attendance.auto_punch_out_at'),
             'shift' => $this->shiftInfo($user),
         ];
     }

@@ -146,6 +146,147 @@ class LedgerService
     }
 
     /**
+     * Daily cash transaction register: the cash book and bank book side by side, a day at a time, the way a
+     * handwritten register is kept. Money in is grouped by who brought it ("From" a technician, the office counter
+     * or online), each line a customer with their phone; money out by who it went to ("To" a person or supplier).
+     * Every amount sits in a Cash or a Bank / UPI column, and each day carries its opening and closing balances.
+     *
+     * @return array{from: string, to: string, opening: array{cash: int, bank: int}, days: list<array>, totals: array<string, int>, closing: array{cash: int, bank: int}}
+     */
+    public function register(Tenant $tenant, string $from, string $to): array
+    {
+        $tz = $tenant->timezone;
+        $since = $this->opening($tenant)['date'];
+        $balance = [
+            'cash' => $this->ledger($tenant, 'cash', $from, $from)['opening'],
+            'bank' => $this->ledger($tenant, 'bank', $from, $from)['opening'],
+        ];
+        // Entries before the opening date are already inside the opening balances.
+        $start = $since && $since > $from ? $since : $from;
+        $book = fn (string $method) => $method === 'cash' ? 'cash' : 'bank';
+
+        $receipts = collect();
+        $expenses = collect();
+        $transfers = collect();
+        if ($start <= $to) {
+            [$utcStart, $utcEnd] = $this->books->bounds($start, $to, $tz);
+            $receipts = Payment::query()->where('payments.status', 'success')
+                ->whereIn('payments.method', [...self::methodsFor('cash'), ...self::methodsFor('bank')])
+                ->whereBetween('payments.paid_at', [$utcStart, $utcEnd])
+                ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')
+                ->leftJoin('customers', 'customers.id', '=', 'invoices.customer_id')
+                ->leftJoin('service_jobs', 'service_jobs.id', '=', 'invoices.job_id')
+                ->leftJoin('users', 'users.id', '=', 'payments.collected_by')
+                ->orderBy('payments.paid_at')->orderBy('payments.id')
+                ->get(['payments.id', 'payments.paid_at', 'payments.method', 'payments.amount', 'payments.receipt_number', 'payments.reference_no', 'payments.collected_by',
+                    'invoices.id as invoice_id', 'invoices.invoice_number', 'invoices.source', 'customers.name as customer', 'customers.phone',
+                    'service_jobs.crm_call_id', 'users.name as collector'])
+                ->groupBy(fn ($p) => CarbonImmutable::parse($p->paid_at)->timezone($tz)->toDateString());
+
+            $expenses = Expense::query()->whereBetween('expense_date', [$start, $to])
+                ->with(['category:id,name', 'user:id,name'])->orderBy('expense_date')->orderBy('id')->get()
+                ->groupBy(fn (Expense $e) => $e->expense_date->format('Y-m-d'));
+
+            $transfers = FundTransfer::query()->whereBetween('transfer_date', [$start, $to])->orderBy('id')->get()
+                ->groupBy(fn (FundTransfer $t) => $t->transfer_date->format('Y-m-d'));
+        }
+
+        $sum = fn ($rows, string $b) => (int) collect($rows)->where('book', $b)->sum('amount');
+        $opening = $balance;
+        $grand = ['cash_in' => 0, 'bank_in' => 0, 'cash_out' => 0, 'bank_out' => 0];
+        $days = [];
+
+        foreach (\Carbon\CarbonPeriod::create($from, $to) as $day) {
+            $d = $day->format('Y-m-d');
+            $dayOpening = $balance;
+
+            $in = collect($receipts[$d] ?? [])->groupBy(fn ($p) => $p->collected_by ? 'u'.$p->collected_by : ($p->method === 'online' ? 'online' : 'office'))
+                ->map(function ($rows, $key) use ($tz, $book, $sum) {
+                    $first = $rows->first();
+                    $lines = $rows->map(fn ($p) => [
+                        'at' => CarbonImmutable::parse($p->paid_at)->timezone($tz)->format('H:i'),
+                        'customer' => $p->customer ?? 'Customer',
+                        'phone' => $p->phone,
+                        'invoice_id' => $p->invoice_id,
+                        'invoice_number' => $p->invoice_number,
+                        'job' => $p->crm_call_id,
+                        'ref' => $p->receipt_number ?? $p->reference_no,
+                        'method' => $p->method,
+                        'book' => $book($p->method),
+                        'amount' => (int) $p->amount,
+                    ])->values();
+
+                    return [
+                        'party' => $key === 'online' ? 'Paid online' : ($key === 'office' ? 'Office counter' : ($first->collector ?? 'Staff')),
+                        'kind' => $key === 'online' || $key === 'office' ? $key : 'staff',
+                        'lines' => $lines->all(),
+                        'cash' => $sum($lines, 'cash'),
+                        'bank' => $sum($lines, 'bank'),
+                    ];
+                })->sortBy(fn ($g) => [$g['kind'] === 'staff' ? 0 : 1, $g['party']])->values();
+
+            $out = collect($expenses[$d] ?? [])->groupBy(fn (Expense $e) => mb_strtolower(trim($e->paid_to ?: ($e->user?->name ?? ''))) ?: '~')
+                ->map(function ($rows) use ($book, $sum) {
+                    $first = $rows->first();
+                    $lines = $rows->map(fn (Expense $e) => [
+                        'expense_id' => $e->id,
+                        'category' => $e->category?->name ?? 'Expense',
+                        'description' => $e->description,
+                        'ref' => $e->reference_no,
+                        'method' => $e->payment_method,
+                        'book' => $book($e->payment_method),
+                        'amount' => (int) $e->amount,
+                    ])->values();
+
+                    return [
+                        'party' => trim($first->paid_to ?: ($first->user?->name ?? '')) ?: 'Not named',
+                        'lines' => $lines->all(),
+                        'cash' => $sum($lines, 'cash'),
+                        'bank' => $sum($lines, 'bank'),
+                    ];
+                })->sortBy('party')->values();
+
+            // Contra: money moved between the two columns, in on one side and out on the other.
+            $contra = collect($transfers[$d] ?? [])->map(fn (FundTransfer $t) => [
+                'transfer_id' => $t->id,
+                'particulars' => $t->direction === 'cash_to_bank' ? 'Cash deposited in bank' : 'Cash withdrawn from bank',
+                'ref' => $t->reference_no,
+                'cash_in' => $t->direction === 'bank_to_cash' ? (int) $t->amount : 0,
+                'bank_in' => $t->direction === 'cash_to_bank' ? (int) $t->amount : 0,
+                'cash_out' => $t->direction === 'cash_to_bank' ? (int) $t->amount : 0,
+                'bank_out' => $t->direction === 'bank_to_cash' ? (int) $t->amount : 0,
+            ])->values();
+
+            $totals = [
+                'cash_in' => (int) $in->sum('cash') + (int) $contra->sum('cash_in'),
+                'bank_in' => (int) $in->sum('bank') + (int) $contra->sum('bank_in'),
+                'cash_out' => (int) $out->sum('cash') + (int) $contra->sum('cash_out'),
+                'bank_out' => (int) $out->sum('bank') + (int) $contra->sum('bank_out'),
+            ];
+            $balance = [
+                'cash' => $balance['cash'] + $totals['cash_in'] - $totals['cash_out'],
+                'bank' => $balance['bank'] + $totals['bank_in'] - $totals['bank_out'],
+            ];
+            foreach ($totals as $k => $v) {
+                $grand[$k] += $v;
+            }
+
+            $days[] = [
+                'date' => $d,
+                'opening' => $dayOpening,
+                'receipts' => $in->all(),
+                'payments' => $out->all(),
+                'transfers' => $contra->all(),
+                'totals' => $totals,
+                'closing' => $balance,
+                'empty' => $in->isEmpty() && $out->isEmpty() && $contra->isEmpty(),
+            ];
+        }
+
+        return ['from' => $from, 'to' => $to, 'opening' => $opening, 'days' => $days, 'totals' => $grand, 'closing' => $balance];
+    }
+
+    /**
      * Money owed by customers, one row per customer, with aging buckets by invoice age.
      *
      * @return array{rows: list<array>, totals: array<string, int>, customers: int}

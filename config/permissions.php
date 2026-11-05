@@ -36,6 +36,7 @@ return [
     'jobs.view' => [...$staff, 'head_engineer', 'service_tracker', 'store_keeper', 'technician'],
     'jobs.manage' => ['admin', 'coordinator', 'head_engineer', 'service_tracker'],
     'jobs.approve_cancel' => ['admin', 'coordinator', 'head_engineer'], // decides a technician's request to cancel
+    'jobs.approve_resume' => ['admin', 'coordinator', 'head_engineer'], // lets a technician go back to a job they left pending
     'visits.execute' => ['technician'],
     'punch' => [...$office, 'technician'], // v2.1: office staff punch too (geo-fenced attendance)
 

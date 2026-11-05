@@ -54,7 +54,8 @@ class TechnicianJobFlowTest extends TestCase
         // The customer's own details stay with the office.
         $this->assertDatabaseMissing('customers', ['id' => $customer->id, 'address' => '12, MG Road']);
         $this->assertDatabaseHas('customer_products', ['id' => $productId, 'serial_no' => 'NEW-SN-1']);
-        $this->assertDatabaseHas('service_jobs', ['id' => $job->id, 'complaint_details' => 'Noise from outdoor unit']);
+        // So does the complaint: the technician's findings go in the service summary.
+        $this->assertDatabaseMissing('service_jobs', ['id' => $job->id, 'complaint_details' => 'Noise from outdoor unit']);
 
         // Someone else's job, or a finished one, can't be changed this way.
         $this->forgetGuards()->actingAsUser($other)->patchJson("/api/v1/jobs/{$job->id}/details", ['address' => 'X'])->assertStatus(422);

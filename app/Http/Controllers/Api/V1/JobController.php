@@ -29,6 +29,7 @@ class JobController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = $this->filtered($request)
+            ->withExists('visits')
             ->with([
                 'customer:id,name,phone,address,city,pincode,lat,lng', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
                 'complaintType:id,name', 'customerProduct:id,product_id,model_no,brand_id,category_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
@@ -281,6 +282,22 @@ class JobController extends Controller
         return $this->ok($job, 'Cancellation rejected. The job stays open.');
     }
 
+    public function approveResume(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['note' => ['nullable', 'string', 'max:500']]);
+        $job = $this->jobs->approveResume(ServiceJob::findOrFail($id), $request->user(), $data['note'] ?? null);
+
+        return $this->ok($job, 'Approved. The technician can start the job again.');
+    }
+
+    public function rejectResume(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['note' => ['required', 'string', 'max:500']], ['note.required' => 'Tell the technician why not yet.']);
+        $job = $this->jobs->rejectResume(ServiceJob::findOrFail($id), $data['note'], $request->user());
+
+        return $this->ok($job, 'Not approved. The technician has been told.');
+    }
+
     public function partPending(Request $request, int $id): JsonResponse
     {
         $data = $request->validate(['note' => ['required', 'string', 'max:500']], ['note.required' => 'Say which part the job is waiting for.']);
@@ -328,7 +345,7 @@ class JobController extends Controller
         $tz = app(TenantContext::class)->tenant()->timezone;
 
         return ServiceJob::query()
-            ->when($user->isTechnician(), fn ($q) => $q->where('assigned_technician_id', $user->id))
+            ->when($user->isTechnician(), fn ($q) => $q->where('assigned_technician_id', $user->id)->closedRecently())
             ->when(! $ignoreStatus && $request->filled('status'), fn ($q) => $q->whereIn('status', explode(',', $request->string('status'))))
             ->when($request->filled('technician_id'), fn ($q) => $request->input('technician_id') === 'unassigned'
                 ? $q->whereNull('assigned_technician_id')

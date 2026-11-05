@@ -77,6 +77,15 @@ class BooksController extends Controller
         return $this->ok($ledger->ledger($tenant, $request->string('book'), $from, $to) + ['opening_settings' => $ledger->opening($tenant)]);
     }
 
+    /** Daily cash transaction register: a day (or up to a month) of money in and out, by person, cash and bank side by side. */
+    public function register(Request $request, LedgerService $ledger): JsonResponse
+    {
+        [$from, $to] = $this->period($request);
+        abort_if(CarbonImmutable::parse($from)->diffInDays(CarbonImmutable::parse($to)) > 31, 422, 'Choose up to 31 days for the register.');
+
+        return $this->ok($ledger->register(app(TenantContext::class)->tenant(), $from, $to));
+    }
+
     public function receivables(Request $request, LedgerService $ledger): JsonResponse
     {
         $request->validate(['search' => ['nullable', 'string', 'max:100'], 'branch_id' => ['nullable', 'integer']]);

@@ -50,6 +50,9 @@ class VisitService
                     ? 'A visit is already in progress for this job.'
                     : 'This job is '.$job->status->value.'.']);
             }
+            if ($job->needs_resume_approval) {
+                throw ValidationException::withMessages(['job' => 'This job was left '.str_replace('_', ' ', $job->status->value).'. Ask the office to approve it before the next visit.']);
+            }
             $tenant = Tenant::findOrFail($job->tenant_id);
             if ($tenant->setting('jobs.require_punch_in', true) && User::whereKey($technician->id)->value('punch_status') !== 'in') {
                 throw ValidationException::withMessages(['punch' => 'Punch in before you start a service.']);
@@ -76,6 +79,11 @@ class VisitService
             ]);
 
             $job->service_type = $data['service_type'];
+            // The go-ahead covers this one visit: left pending again, the next one needs another.
+            $job->resume_approved_at = null;
+            $job->resume_approved_by = null;
+            $job->resume_requested_at = null;
+            $job->resume_request_note = null;
             $this->jobs->transition($job, JobStatus::InProgress, $technician->id, 'Service started ('.str_replace('_', ' ', $data['service_type']).')');
 
             return $visit;
@@ -104,27 +112,35 @@ class VisitService
         if (! in_array($job->status, [JobStatus::Open, JobStatus::Pending, JobStatus::PartPending], true)) {
             throw ValidationException::withMessages(['job' => 'Only open or pending jobs can be updated before a visit.']);
         }
+        if ($job->needs_resume_approval) {
+            throw ValidationException::withMessages(['job' => 'Ask the office to approve this job before the next visit.']);
+        }
 
         return DB::transaction(fn () => $this->applyCallDetails($job, $data));
     }
 
+    /**
+     * The complaint is the office's record of what the customer reported: the technician sees it but doesn't
+     * change it (their findings go in the service summary and the job's updates). Older app versions still
+     * send those fields back, so they're dropped rather than refused.
+     */
     private function applyCallDetails(ServiceJob $job, array $data): ServiceJob
     {
-        // The app sends the plain text back with every save: unchanged, it must not wipe the office's formatting.
-        if (array_key_exists('complaint_details', $data) && (string) $data['complaint_details'] === (string) $job->complaint_details) {
-            unset($data['complaint_details']);
-        }
-        $job->fill(array_intersect_key($data, array_flip(['complaint_details', 'complaint_type_id', 'complaint_summary_id', 'priority', 'call_type', 'customer_satisfaction_code'])))->save();
+        $job->fill(array_intersect_key($data, array_flip(['customer_satisfaction_code'])))->save();
         $this->applyProductDetails($job, $data);
 
         return $job;
     }
 
-    /** The technician records the unit in front of them: they see the label, so they can correct any of it. */
+    /**
+     * The unit in front of the technician. Brand, product type, model and the job's product category are locked
+     * once the office has entered them; the technician fills in any that are missing, and corrects the rest
+     * (serial numbers, warranty, purchase date, dealer).
+     */
     private function applyProductDetails(ServiceJob $job, array $data): void
     {
-        $details = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no', 'purchase_date', 'warranty_type', 'warranty_expiry', 'dealer_id', 'brand_id']));
-        $identity = array_filter(array_intersect_key($data, array_flip(['model_no', 'category_id'])), fn ($v) => trim((string) $v) !== '');
+        $details = array_intersect_key($data, array_flip(['serial_no', 'outdoor_serial_no', 'purchase_date', 'warranty_type', 'warranty_expiry', 'dealer_id']));
+        $identity = array_filter(array_intersect_key($data, array_flip(['model_no', 'category_id', 'brand_id'])), fn ($v) => trim((string) $v) !== '');
         $product = $job->customerProduct;
 
         if (! $product) {
@@ -135,29 +151,32 @@ class VisitService
             $job->forceFill(['customer_product_id' => $product->id])->save();
             $job->setRelation('customerProduct', $product);
         } else {
-            // The app sends these back unchanged with every save; only a real change counts.
-            $currentModel = $product->model_no ?: $product->product?->model_name;
-            if (isset($identity['model_no']) && $currentModel && strcasecmp(trim($identity['model_no']), $currentModel) === 0) {
-                unset($identity['model_no']);
+            $current = [
+                'model_no' => $product->model_no ?: $product->product?->model_name,
+                'category_id' => $product->category_id ?: $product->product?->category_id,
+                'brand_id' => $product->brand_id ?: $product->product?->brand_id,
+            ];
+            $names = ['model_no' => 'Model', 'category_id' => 'Product type', 'brand_id' => 'Brand'];
+            foreach ($identity as $key => $value) {
+                if (! $current[$key]) {
+                    continue; // missing: the technician may add it
+                }
+                $same = $key === 'model_no' ? strcasecmp(trim((string) $value), (string) $current[$key]) === 0 : (int) $value === (int) $current[$key];
+                if (! $same) {
+                    throw ValidationException::withMessages([$key => "{$names[$key]} was entered by the office. Ask them to change it."]);
+                }
+                unset($identity[$key]); // sent back unchanged
             }
-            $sameCategory = isset($identity['category_id']) && (int) $identity['category_id'] === (int) ($product->category_id ?: $product->product?->category_id);
-            if ($sameCategory && $job->product_category) {
-                unset($identity['category_id']);
-            }
-            $sameBrand = ! array_key_exists('brand_id', $details) || (int) $details['brand_id'] === (int) ($product->brand_id ?: $product->product?->brand_id);
-            // Corrected by hand, it's no longer that catalogue model: keep what the link was supplying.
-            if ($product->product_id && (isset($identity['model_no']) || (isset($identity['category_id']) && ! $sameCategory) || ! $sameBrand)) {
-                $product->fill([
-                    'model_no' => $currentModel,
-                    'brand_id' => $product->brand_id ?: $product->product?->brand_id,
-                    'category_id' => $product->category_id ?: $product->product?->category_id,
-                ]);
+            // Filling a gap on a catalogue unit: keep what the link was supplying alongside it.
+            if ($product->product_id && $identity) {
+                $product->fill(array_filter($current));
                 $product->product_id = null;
             }
             $product->fill($details + $identity)->save();
         }
 
-        if (isset($identity['category_id'])) {
+        // The job's product category comes from the product type only while the office hasn't written one.
+        if (isset($identity['category_id']) && ! $job->product_category) {
             $job->forceFill(['product_category' => ProductCategory::whereKey($identity['category_id'])->value('name')])->save();
         }
     }

@@ -79,13 +79,15 @@ class ModelCodeAndAgeSettingsTest extends TestCase
         $this->patchJson("/api/v1/jobs/{$job}/details", ['model_no' => 'M-1'])->assertOk();
         $visit = $this->postJson("/api/v1/jobs/{$job}/visits/start", ['service_type' => 'tele_call'])->assertCreated()->json('data.id');
 
-        // During the visit.
-        $this->patchJson("/api/v1/visits/{$visit}", ['model_no' => 'M-2', 'customer_satisfaction_code' => 'KKD-111'])->assertOk();
-        $this->getJson("/api/v1/jobs/{$job}")->assertJsonPath('data.customer_satisfaction_code', 'KKD-111')->assertJsonPath('data.customer_product.model_no', 'M-2');
+        // During the visit: once entered, the model is locked; the code can still be added.
+        $this->patchJson("/api/v1/visits/{$visit}", ['model_no' => 'M-2'])->assertStatus(422)->assertJsonValidationErrors('model_no');
+        $this->patchJson("/api/v1/visits/{$visit}", ['model_no' => 'm-1', 'customer_satisfaction_code' => 'KKD-111'])->assertOk();
+        $this->getJson("/api/v1/jobs/{$job}")->assertJsonPath('data.customer_satisfaction_code', 'KKD-111')->assertJsonPath('data.customer_product.model_no', 'M-1');
 
         // When closing: a new code replaces it, and leaving it blank keeps it.
         $this->postJson("/api/v1/visits/{$visit}/complete", ['status' => 'pending', 'service_summary' => 'Checked', 'customer_satisfaction_code' => 'KKD-222'])->assertOk();
         $this->getJson("/api/v1/jobs/{$job}")->assertJsonPath('data.customer_satisfaction_code', 'KKD-222');
+        $this->allowResume($job);
         $second = $this->postJson("/api/v1/jobs/{$job}/visits/start", ['service_type' => 'tele_call'])->json('data.id');
         $this->postJson("/api/v1/visits/{$second}/complete", ['status' => 'pending', 'service_summary' => 'Again', 'customer_satisfaction_code' => null])->assertOk();
         $this->getJson("/api/v1/jobs/{$job}")->assertJsonPath('data.customer_satisfaction_code', 'KKD-222');

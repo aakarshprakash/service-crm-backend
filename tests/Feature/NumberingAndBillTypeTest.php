@@ -167,6 +167,7 @@ class NumberingAndBillTypeTest extends TestCase
         $tech = User::find(ServiceJob::withoutGlobalScopes()->find($invoice->job_id)->assigned_technician_id);
         $this->forgetGuards();
         $this->actingAsUser($tech);
+        $this->allowResume($invoice->job_id);
         $visit = $this->postJson("/api/v1/jobs/{$invoice->job_id}/visits/start", ['service_type' => 'tele_call'])->assertCreated()->json('data.id');
         $this->postJson("/api/v1/visits/{$visit}/complete", ['status' => 'pending', 'service_summary' => 'Again', 'labour_charge' => 59000, 'payment_method' => 'credit'])->assertOk();
 

@@ -41,9 +41,16 @@ class Tenant extends Model
         // Customer sign-off: when on, a visit can only be completed after the customer signs.
         // require_punch_in: technicians must be punched in (on duty) to start a visit.
         // age_*: from how many days an unfinished job shows amber, orange ("old") and red in the Jobs list.
-        'jobs' => ['require_signature' => false, 'require_punch_in' => true, 'age_warning' => 3, 'age_old' => 7, 'age_critical' => 14],
+        // resume_needs_approval: a job a technician left pending / part pending waits for the office before the next visit.
+        // auto_close_visits_at: HH:MM (company time) when visits still running are closed as pending, remark "Auto closed"; null = never.
+        // tech_hide_closed_after_days: completed and cancelled jobs leave the technician's app after this many days; 0 = keep them.
+        'jobs' => [
+            'require_signature' => false, 'require_punch_in' => true, 'age_warning' => 3, 'age_old' => 7, 'age_critical' => 14,
+            'resume_needs_approval' => true, 'auto_close_visits_at' => null, 'tech_hide_closed_after_days' => 2,
+        ],
         // Geo-fenced attendance: off | flag (record outside punches) | enforce (block them).
-        'attendance' => ['geofence' => 'off', 'geofence_technicians' => false, 'require_location' => false],
+        // auto_punch_out_at: HH:MM (company time) when anyone still punched in is punched out; null = never.
+        'attendance' => ['geofence' => 'off', 'geofence_technicians' => false, 'require_location' => false, 'auto_punch_out_at' => null],
         // GST (applies once the company GSTIN is set). Prices are GST-inclusive; rates in %.
         // job_bills / walkin_bills: whether a new bill starts as a GST or non-GST bill. Each bill can still be changed.
         'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst'],

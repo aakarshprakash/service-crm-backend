@@ -172,6 +172,10 @@ Route::prefix('v1')->group(function () {
             Route::post('jobs/{id}/cancel/approve', [JobController::class, 'approveCancel'])->whereNumber('id');
             Route::post('jobs/{id}/cancel/reject', [JobController::class, 'rejectCancel'])->whereNumber('id');
         });
+        Route::middleware('can:jobs.approve_resume')->group(function () {
+            Route::post('jobs/{id}/resume/approve', [JobController::class, 'approveResume'])->whereNumber('id');
+            Route::post('jobs/{id}/resume/reject', [JobController::class, 'rejectResume'])->whereNumber('id');
+        });
         Route::middleware('can:jobs.manage')->group(function () {
             Route::post('jobs', [JobController::class, 'store']);
             Route::patch('jobs/{id}', [JobController::class, 'update'])->whereNumber('id');
@@ -191,6 +195,7 @@ Route::prefix('v1')->group(function () {
             Route::post('jobs/{id}/visits/start', [VisitController::class, 'start'])->whereNumber('id');
             Route::patch('jobs/{id}/details', [VisitController::class, 'prepare'])->whereNumber('id');
             Route::post('jobs/{id}/cancel-request', [VisitController::class, 'requestCancel'])->whereNumber('id');
+            Route::post('jobs/{id}/resume-request', [VisitController::class, 'requestResume'])->whereNumber('id')->middleware('throttle:10,1');
             Route::post('jobs/{id}/customer-location', [JobLocationController::class, 'fromJob'])->whereNumber('id');
             Route::get('my/parts', [VisitController::class, 'myParts']);
             Route::get('visits/active', [VisitController::class, 'active']);
@@ -224,6 +229,7 @@ Route::prefix('v1')->group(function () {
             Route::get('books/day-book', [BooksController::class, 'dayBook']);
             Route::get('books/overview', [BooksController::class, 'overview']);
             Route::get('books/ledger', [BooksController::class, 'ledger']);
+            Route::get('books/register', [BooksController::class, 'register']);
             Route::get('books/receivables', [BooksController::class, 'receivables']);
             Route::get('books/profit-loss', [BooksController::class, 'profitLoss']);
             Route::get('books/transfers', [BooksController::class, 'transfers']);

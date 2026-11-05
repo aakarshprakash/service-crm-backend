@@ -57,7 +57,7 @@ class CustomerController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $data = $request->validate($this->rules() + $this->productRules('products.*.'));
+        $data = $request->validate($this->rules() + $this->productRules('products.*.'), self::PRODUCT_MESSAGES);
 
         $customer = DB::transaction(function () use ($data) {
             $customer = Customer::create(Arr::except($data, ['products']));
@@ -100,7 +100,7 @@ class CustomerController extends Controller
     public function storeProduct(Request $request, int $id): JsonResponse
     {
         $customer = Customer::findOrFail($id);
-        $product = $customer->products()->create($request->validate($this->productRules()));
+        $product = $customer->products()->create($request->validate($this->productRules(), self::PRODUCT_MESSAGES));
 
         return $this->created($product->load(['product.brand:id,name', 'brand:id,name', 'category:id,name', 'dealer:id,name']), 'Product added.');
     }
@@ -108,7 +108,7 @@ class CustomerController extends Controller
     public function updateProduct(Request $request, int $id, int $productId): JsonResponse
     {
         $product = CustomerProduct::where('customer_id', $id)->findOrFail($productId);
-        $product->update($request->validate($this->productRules()));
+        $product->update($request->validate($this->productRules(), self::PRODUCT_MESSAGES));
 
         return $this->ok($product->load(['product.brand:id,name', 'brand:id,name', 'category:id,name', 'dealer:id,name']), 'Product updated.');
     }
@@ -168,6 +168,12 @@ class CustomerController extends Controller
         ];
     }
 
+    /** A unit in warranty is only covered from its purchase date, so the date is needed to check it. */
+    public const PRODUCT_MESSAGES = [
+        'purchase_date.required_if' => 'Enter the purchase date: the unit is marked in warranty.',
+        'products.*.purchase_date.required_if' => 'Enter the purchase date: the unit is marked in warranty.',
+    ];
+
     private function productRules(string $prefix = ''): array
     {
         $tenantId = app(TenantContext::class)->id();
@@ -179,7 +185,7 @@ class CustomerController extends Controller
             $prefix.'category_id' => ['nullable', 'integer', Rule::exists('product_categories', 'id')->where('tenant_id', $tenantId)],
             $prefix.'serial_no' => ['nullable', 'string', 'max:100'],
             $prefix.'outdoor_serial_no' => ['nullable', 'string', 'max:100'],
-            $prefix.'purchase_date' => ['nullable', 'date', 'before_or_equal:today'],
+            $prefix.'purchase_date' => ['nullable', 'date', 'before_or_equal:today', 'required_if:'.$prefix.'warranty_type,in_warranty'],
             $prefix.'warranty_type' => ['nullable', Rule::in(['in_warranty', 'extended', 'amc', 'out_of_warranty'])],
             $prefix.'warranty_expiry' => ['nullable', 'date'],
             $prefix.'dealer_id' => ['nullable', 'integer', Rule::exists('dealers', 'id')->where('tenant_id', $tenantId)],
