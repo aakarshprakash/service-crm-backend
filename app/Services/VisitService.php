@@ -133,9 +133,9 @@ class VisitService
     }
 
     /**
-     * The unit in front of the technician. Brand, product type, model and the job's product category are locked
-     * once the office has entered them; the technician fills in any that are missing, and corrects the rest
-     * (serial numbers, warranty, purchase date, dealer).
+     * The unit in front of the technician. Brand, product type and the job's product category are locked once the
+     * office has entered them; the technician fills in any that are missing. The model is the technician's to enter
+     * from the unit's label, so it stays editable, as do serial numbers, warranty, purchase date and dealer.
      */
     private function applyProductDetails(ServiceJob $job, array $data): void
     {
@@ -156,18 +156,26 @@ class VisitService
                 'category_id' => $product->category_id ?: $product->product?->category_id,
                 'brand_id' => $product->brand_id ?: $product->product?->brand_id,
             ];
-            $names = ['model_no' => 'Model', 'category_id' => 'Product type', 'brand_id' => 'Brand'];
+            $names = ['category_id' => 'Product type', 'brand_id' => 'Brand'];
             foreach ($identity as $key => $value) {
                 if (! $current[$key]) {
                     continue; // missing: the technician may add it
                 }
-                $same = $key === 'model_no' ? strcasecmp(trim((string) $value), (string) $current[$key]) === 0 : (int) $value === (int) $current[$key];
-                if (! $same) {
+                if ($key === 'model_no') {
+                    // The app sends it back unchanged with every save; only a real change counts.
+                    if (strcasecmp(trim((string) $value), (string) $current[$key]) === 0) {
+                        unset($identity[$key]);
+                    }
+
+                    continue;
+                }
+                if ((int) $value !== (int) $current[$key]) {
                     throw ValidationException::withMessages([$key => "{$names[$key]} was entered by the office. Ask them to change it."]);
                 }
                 unset($identity[$key]); // sent back unchanged
             }
-            // Filling a gap on a catalogue unit: keep what the link was supplying alongside it.
+            // A new model, or a gap filled, on a catalogue unit: it's no longer that catalogue model,
+            // so keep what the link was supplying (brand, type) on the unit itself.
             if ($product->product_id && $identity) {
                 $product->fill(array_filter($current));
                 $product->product_id = null;
