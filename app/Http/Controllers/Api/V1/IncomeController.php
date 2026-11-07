@@ -16,6 +16,16 @@ use Illuminate\Validation\Rule;
  */
 class IncomeController extends Controller
 {
+    /** Field names as people say them, for error messages ("The category field is required."). */
+    private const NAMES = [
+        'income_date' => 'date',
+        'income_category_id' => 'category',
+        'payment_method' => 'payment method',
+        'received_from' => 'received from',
+        'reference_no' => 'reference number',
+        'user_id' => 'staff member',
+    ];
+
     public function index(Request $request): JsonResponse
     {
         $query = $this->filtered($request);
@@ -33,7 +43,7 @@ class IncomeController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $income = Income::create($request->validate($this->rules()) + ['created_by' => $request->user()->id]);
+        $income = Income::create($request->validate($this->rules(), [], self::NAMES) + ['created_by' => $request->user()->id]);
 
         return $this->created($income->load(['category:id,name', 'branch:id,name', 'user:id,name']), 'Income recorded.');
     }
@@ -41,7 +51,7 @@ class IncomeController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $income = Income::findOrFail($id);
-        $income->update($request->validate($this->rules(true)));
+        $income->update($request->validate($this->rules(true), [], self::NAMES));
 
         return $this->ok($income->load(['category:id,name', 'branch:id,name', 'user:id,name']), 'Income updated.');
     }

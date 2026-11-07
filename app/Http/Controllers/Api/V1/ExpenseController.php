@@ -14,6 +14,16 @@ use Illuminate\Validation\Rule;
 /** Business expenses (fuel, salaries, rent, purchases…) for the mini accounts module. */
 class ExpenseController extends Controller
 {
+    /** Field names as people say them, for error messages ("The category field is required."). */
+    private const NAMES = [
+        'expense_date' => 'date',
+        'expense_category_id' => 'category',
+        'payment_method' => 'payment method',
+        'paid_to' => 'paid to',
+        'reference_no' => 'reference number',
+        'user_id' => 'staff member',
+    ];
+
     public function index(Request $request): JsonResponse
     {
         $query = $this->filtered($request);
@@ -31,7 +41,7 @@ class ExpenseController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $expense = Expense::create($request->validate($this->rules()) + ['created_by' => $request->user()->id]);
+        $expense = Expense::create($request->validate($this->rules(), [], self::NAMES) + ['created_by' => $request->user()->id]);
 
         return $this->created($expense->load(['category:id,name', 'branch:id,name', 'user:id,name']), 'Expense recorded.');
     }
@@ -39,7 +49,7 @@ class ExpenseController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $expense = Expense::findOrFail($id);
-        $expense->update($request->validate($this->rules(true)));
+        $expense->update($request->validate($this->rules(true), [], self::NAMES));
 
         return $this->ok($expense->load(['category:id,name', 'branch:id,name', 'user:id,name']), 'Expense updated.');
     }
