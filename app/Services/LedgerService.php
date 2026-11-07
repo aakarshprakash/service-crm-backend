@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\CashDeposit;
 use App\Models\Expense;
+use App\Models\Income;
 use App\Models\FundTransfer;
 use App\Models\Invoice;
 use App\Models\Payment;
@@ -142,7 +144,40 @@ class LedgerService
                 ];
             });
 
-        return $receipts->concat($expenses)->concat($transfers)->sortBy('at')->values();
+        $manual = Income::query()->whereIn('payment_method', $methods)->whereBetween('income_date', [$from, $to])
+            ->with('category:id,name')->get()
+            ->map(fn (Income $i) => [
+                'at' => $i->income_date->format('Y-m-d').' 12:00',
+                'type' => 'income',
+                'ref' => $i->reference_no,
+                'particulars' => trim(($i->category?->name ?? 'Other income').($i->received_from ? ' · '.$i->received_from : '')),
+                'method' => $i->payment_method,
+                'link' => ['income_id' => $i->id],
+                'in' => (int) $i->amount,
+                'out' => 0,
+            ]);
+
+        // A technician paying collected cash straight into the bank: it leaves the cash book and enters the bank book.
+        // Cash handed over at the office stays in the cash book, so it moves nothing.
+        $deposits = $this->bankDeposits($from, $to)->map(fn (CashDeposit $d) => [
+            'at' => $d->deposit_date->format('Y-m-d').' 18:00',
+            'type' => 'transfer',
+            'ref' => $d->reference_no,
+            'particulars' => 'Cash deposited in bank by '.($d->technician?->name ?? 'technician'),
+            'method' => 'contra',
+            'link' => ['cash_close_id' => $d->cash_close_id],
+            'in' => $book === 'bank' ? (int) $d->amount : 0,
+            'out' => $book === 'cash' ? (int) $d->amount : 0,
+        ]);
+
+        return $receipts->concat($manual)->concat($expenses)->concat($transfers)->concat($deposits)->sortBy('at')->values();
+    }
+
+    /** Technicians' cash-close deposits made straight into the bank, between local dates. */
+    private function bankDeposits(string $from, string $to): Collection
+    {
+        return CashDeposit::query()->where('deposited_to', 'bank')->whereBetween('deposit_date', [$from, $to])
+            ->with('technician:id,name')->orderBy('deposit_date')->orderBy('id')->get();
     }
 
     /**
@@ -168,9 +203,11 @@ class LedgerService
         $receipts = collect();
         $expenses = collect();
         $transfers = collect();
+        $deposits = collect();
         if ($start <= $to) {
             [$utcStart, $utcEnd] = $this->books->bounds($start, $to, $tz);
-            $receipts = Payment::query()->where('payments.status', 'success')
+            // Invoice payments and manual income become the same kind of line: who paid, and who brought it in.
+            $paid = Payment::query()->where('payments.status', 'success')
                 ->whereIn('payments.method', [...self::methodsFor('cash'), ...self::methodsFor('bank')])
                 ->whereBetween('payments.paid_at', [$utcStart, $utcEnd])
                 ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')
@@ -181,7 +218,53 @@ class LedgerService
                 ->get(['payments.id', 'payments.paid_at', 'payments.method', 'payments.amount', 'payments.receipt_number', 'payments.reference_no', 'payments.collected_by',
                     'invoices.id as invoice_id', 'invoices.invoice_number', 'invoices.source', 'customers.name as customer', 'customers.phone',
                     'service_jobs.crm_call_id', 'users.name as collector'])
-                ->groupBy(fn ($p) => CarbonImmutable::parse($p->paid_at)->timezone($tz)->toDateString());
+                ->map(function ($p) use ($tz, $book) {
+                    $at = CarbonImmutable::parse($p->paid_at)->timezone($tz);
+
+                    return [
+                        'date' => $at->toDateString(),
+                        'group' => $p->collected_by ? 'u'.$p->collected_by : ($p->method === 'online' ? 'online' : 'office'),
+                        'collector' => $p->collector,
+                        'line' => [
+                            'at' => $at->format('H:i'),
+                            'customer' => $p->customer ?? 'Customer',
+                            'phone' => $p->phone,
+                            'invoice_id' => $p->invoice_id,
+                            'invoice_number' => $p->invoice_number,
+                            'income_id' => null,
+                            'category' => null,
+                            'job' => $p->crm_call_id,
+                            'ref' => $p->receipt_number ?? $p->reference_no,
+                            'method' => $p->method,
+                            'book' => $book($p->method),
+                            'amount' => (int) $p->amount,
+                        ],
+                    ];
+                });
+
+            $manual = Income::query()->whereBetween('income_date', [$start, $to])
+                ->with(['category:id,name', 'user:id,name'])->orderBy('income_date')->orderBy('id')->get()
+                ->map(fn (Income $i) => [
+                    'date' => $i->income_date->format('Y-m-d'),
+                    'group' => $i->user_id ? 'u'.$i->user_id : 'office',
+                    'collector' => $i->user?->name,
+                    'line' => [
+                        'at' => null,
+                        'customer' => $i->received_from ?: ($i->category?->name ?? 'Other income'),
+                        'phone' => $i->phone,
+                        'invoice_id' => null,
+                        'invoice_number' => null,
+                        'income_id' => $i->id,
+                        'category' => $i->category?->name ?? 'Other income',
+                        'job' => null,
+                        'ref' => $i->reference_no,
+                        'method' => $i->payment_method,
+                        'book' => $book($i->payment_method),
+                        'amount' => (int) $i->amount,
+                    ],
+                ]);
+
+            $receipts = $paid->concat($manual)->groupBy('date');
 
             $expenses = Expense::query()->whereBetween('expense_date', [$start, $to])
                 ->with(['category:id,name', 'user:id,name'])->orderBy('expense_date')->orderBy('id')->get()
@@ -189,6 +272,8 @@ class LedgerService
 
             $transfers = FundTransfer::query()->whereBetween('transfer_date', [$start, $to])->orderBy('id')->get()
                 ->groupBy(fn (FundTransfer $t) => $t->transfer_date->format('Y-m-d'));
+
+            $deposits = $this->bankDeposits($start, $to)->groupBy(fn (CashDeposit $d) => $d->deposit_date->format('Y-m-d'));
         }
 
         $sum = fn ($rows, string $b) => (int) collect($rows)->where('book', $b)->sum('amount');
@@ -200,24 +285,12 @@ class LedgerService
             $d = $day->format('Y-m-d');
             $dayOpening = $balance;
 
-            $in = collect($receipts[$d] ?? [])->groupBy(fn ($p) => $p->collected_by ? 'u'.$p->collected_by : ($p->method === 'online' ? 'online' : 'office'))
-                ->map(function ($rows, $key) use ($tz, $book, $sum) {
-                    $first = $rows->first();
-                    $lines = $rows->map(fn ($p) => [
-                        'at' => CarbonImmutable::parse($p->paid_at)->timezone($tz)->format('H:i'),
-                        'customer' => $p->customer ?? 'Customer',
-                        'phone' => $p->phone,
-                        'invoice_id' => $p->invoice_id,
-                        'invoice_number' => $p->invoice_number,
-                        'job' => $p->crm_call_id,
-                        'ref' => $p->receipt_number ?? $p->reference_no,
-                        'method' => $p->method,
-                        'book' => $book($p->method),
-                        'amount' => (int) $p->amount,
-                    ])->values();
+            $in = collect($receipts[$d] ?? [])->groupBy('group')
+                ->map(function ($rows, $key) use ($sum) {
+                    $lines = $rows->pluck('line')->values();
 
                     return [
-                        'party' => $key === 'online' ? 'Paid online' : ($key === 'office' ? 'Office counter' : ($first->collector ?? 'Staff')),
+                        'party' => $key === 'online' ? 'Paid online' : ($key === 'office' ? 'Office counter' : ($rows->first()['collector'] ?? 'Staff')),
                         'kind' => $key === 'online' || $key === 'office' ? $key : 'staff',
                         'lines' => $lines->all(),
                         'cash' => $sum($lines, 'cash'),
@@ -255,7 +328,15 @@ class LedgerService
                 'bank_in' => $t->direction === 'cash_to_bank' ? (int) $t->amount : 0,
                 'cash_out' => $t->direction === 'cash_to_bank' ? (int) $t->amount : 0,
                 'bank_out' => $t->direction === 'bank_to_cash' ? (int) $t->amount : 0,
-            ])->values();
+            ])->concat(collect($deposits[$d] ?? [])->map(fn (CashDeposit $dep) => [
+                'transfer_id' => null,
+                'particulars' => 'Cash deposited in bank by '.($dep->technician?->name ?? 'technician'),
+                'ref' => $dep->reference_no,
+                'cash_in' => 0,
+                'bank_in' => (int) $dep->amount,
+                'cash_out' => (int) $dep->amount,
+                'bank_out' => 0,
+            ]))->values();
 
             $totals = [
                 'cash_in' => (int) $in->sum('cash') + (int) $contra->sum('cash_in'),
@@ -356,6 +437,7 @@ class LedgerService
             'income' => [
                 $line('Service income (jobs)', $current['income_by_source']['job'], $previous['income_by_source']['job']),
                 $line('Walk-in sales', $current['income_by_source']['walk_in'], $previous['income_by_source']['walk_in']),
+                $line('Other income (no invoice)', $current['income_by_source']['other'], $previous['income_by_source']['other']),
             ],
             'expenses' => $categories->map(fn ($c) => $line($c, (int) ($current['expense_by_category'][$c] ?? 0), (int) ($previous['expense_by_category'][$c] ?? 0)))
                 ->sortByDesc('current')->values()->all(),

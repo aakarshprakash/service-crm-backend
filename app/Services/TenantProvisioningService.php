@@ -7,6 +7,7 @@ use App\Models\ActionTakenOption;
 use App\Models\Branch;
 use App\Models\ComplaintType;
 use App\Models\ExpenseCategory;
+use App\Models\IncomeCategory;
 use App\Models\LeaveType;
 use App\Models\ProductCategory;
 use App\Models\SubscriptionPlan;
@@ -38,6 +39,11 @@ class TenantProvisioningService
     public const DEFAULT_EXPENSE_CATEGORIES = [
         'Fuel & travel', 'Salaries & wages', 'Rent', 'Electricity & utilities', 'Spare parts purchase', 'Tools & equipment',
         'Repairs & maintenance', 'Office supplies', 'Phone & internet', 'Marketing', 'Food & refreshments', 'Other',
+    ];
+
+    /** Money received without an invoice, by kind (editable in Master data). */
+    public const DEFAULT_INCOME_CATEGORIES = [
+        'Service charge (no bill)', 'Spare parts sale', 'AMC / contract', 'Installation', 'Commission', 'Scrap sale', 'Other income',
     ];
 
     /** Leave types every company starts with (editable in Master data). */
@@ -90,6 +96,9 @@ class TenantProvisioningService
                 }
                 foreach (self::DEFAULT_EXPENSE_CATEGORIES as $name) {
                     ExpenseCategory::create(['name' => $name]);
+                }
+                foreach (self::DEFAULT_INCOME_CATEGORIES as $name) {
+                    IncomeCategory::create(['name' => $name]);
                 }
                 foreach (self::DEFAULT_LEAVE_TYPES as $type) {
                     LeaveType::create($type);

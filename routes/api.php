@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
 use App\Http\Controllers\Api\V1\ExpenseClaimController;
 use App\Http\Controllers\Api\V1\ExpenseController;
+use App\Http\Controllers\Api\V1\IncomeController;
 use App\Http\Controllers\Api\V1\HrController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CashCloseController;
@@ -220,6 +221,10 @@ Route::prefix('v1')->group(function () {
             Route::post('expenses', [ExpenseController::class, 'store']);
             Route::patch('expenses/{id}', [ExpenseController::class, 'update'])->whereNumber('id');
             Route::delete('expenses/{id}', [ExpenseController::class, 'destroy'])->whereNumber('id');
+            Route::get('incomes', [IncomeController::class, 'index']);
+            Route::post('incomes', [IncomeController::class, 'store']);
+            Route::patch('incomes/{id}', [IncomeController::class, 'update'])->whereNumber('id');
+            Route::delete('incomes/{id}', [IncomeController::class, 'destroy'])->whereNumber('id');
             Route::get('expense-claims', [ExpenseClaimController::class, 'index']);
             Route::post('expense-claims/{id}/approve', [ExpenseClaimController::class, 'approve'])->whereNumber('id');
             Route::post('expense-claims/{id}/reject', [ExpenseClaimController::class, 'reject'])->whereNumber('id');
