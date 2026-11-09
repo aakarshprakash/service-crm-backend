@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\Income;
+use App\Services\OfficeDayCloseService;
 use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -43,7 +44,9 @@ class IncomeController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $income = Income::create($request->validate($this->rules(), [], self::NAMES) + ['created_by' => $request->user()->id]);
+        $data = $request->validate($this->rules(), [], self::NAMES);
+        app(OfficeDayCloseService::class)->assertOpen($data['income_date'], 'income_date');
+        $income = Income::create($data + ['created_by' => $request->user()->id]);
 
         return $this->created($income->load(['category:id,name', 'branch:id,name', 'user:id,name']), 'Income recorded.');
     }
@@ -51,14 +54,21 @@ class IncomeController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $income = Income::findOrFail($id);
-        $income->update($request->validate($this->rules(true), [], self::NAMES));
+        $data = $request->validate($this->rules(true), [], self::NAMES);
+        // Neither the day it was on nor the day it moves to may be closed.
+        $days = app(OfficeDayCloseService::class);
+        $days->assertOpen($income->income_date->toDateString(), 'income_date');
+        $days->assertOpen($data['income_date'] ?? $income->income_date->toDateString(), 'income_date');
+        $income->update($data);
 
         return $this->ok($income->load(['category:id,name', 'branch:id,name', 'user:id,name']), 'Income updated.');
     }
 
     public function destroy(int $id): JsonResponse
     {
-        Income::findOrFail($id)->delete();
+        $income = Income::findOrFail($id);
+        app(OfficeDayCloseService::class)->assertOpen($income->income_date->toDateString(), 'income_date');
+        $income->delete();
 
         return $this->ok(null, 'Income deleted.');
     }

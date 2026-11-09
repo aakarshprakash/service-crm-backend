@@ -76,8 +76,14 @@ class ExpenseClaimService
             }
             $claim->loadMissing(['user:id,name,branch_id', 'job:id,crm_call_id']);
 
+            // A claim from a day the office has since closed is booked on the first open day instead.
+            $date = app(OfficeDayCloseService::class)->firstOpenDate($claim->claim_date->toDateString());
+            if ($date === null) {
+                throw ValidationException::withMessages(['claim' => 'Today’s office day is closed, so this expense can’t be booked. An admin can reopen it, or approve the claim tomorrow.']);
+            }
+
             $expense = Expense::create([
-                'expense_date' => $claim->claim_date,
+                'expense_date' => $date,
                 'expense_category_id' => $claim->expense_category_id,
                 'amount' => $claim->amount,
                 'payment_method' => $claim->paid_from === 'cash_in_hand' ? 'cash' : $method,

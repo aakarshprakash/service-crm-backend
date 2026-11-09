@@ -7,6 +7,7 @@ use App\Models\Expense;
 use App\Models\Income;
 use App\Models\FundTransfer;
 use App\Models\Invoice;
+use App\Models\OfficeDayClose;
 use App\Models\Payment;
 use App\Models\Tenant;
 use Carbon\CarbonImmutable;
@@ -170,7 +171,30 @@ class LedgerService
             'out' => $book === 'cash' ? (int) $d->amount : 0,
         ]);
 
-        return $receipts->concat($manual)->concat($expenses)->concat($transfers)->concat($deposits)->sortBy('at')->values();
+        // A short or extra office cash count is posted to the cash book, so the book keeps agreeing with the drawer.
+        $counts = $book !== 'cash' ? collect() : $this->countDifferences($from, $to)->map(fn (OfficeDayClose $c) => [
+            'at' => $c->close_date->format('Y-m-d').' 23:59',
+            'type' => 'adjustment',
+            'ref' => null,
+            'particulars' => self::countParticulars($c),
+            'method' => 'cash',
+            'link' => ['office_close_date' => $c->close_date->format('Y-m-d')],
+            'in' => max(0, $c->difference),
+            'out' => max(0, -$c->difference),
+        ]);
+
+        return $receipts->concat($manual)->concat($expenses)->concat($transfers)->concat($deposits)->concat($counts)->sortBy('at')->values();
+    }
+
+    /** Office day closes whose count didn't match, between local dates. */
+    private function countDifferences(string $from, string $to): Collection
+    {
+        return OfficeDayClose::query()->where('difference', '!=', 0)->whereBetween('close_date', [$from, $to])->orderBy('close_date')->get();
+    }
+
+    private static function countParticulars(OfficeDayClose $c): string
+    {
+        return 'Office cash count '.($c->difference < 0 ? 'short' : 'extra').($c->remarks ? ': '.$c->remarks : '');
     }
 
     /** Technicians' cash-close deposits made straight into the bank, between local dates. */
@@ -204,6 +228,7 @@ class LedgerService
         $expenses = collect();
         $transfers = collect();
         $deposits = collect();
+        $counts = collect();
         if ($start <= $to) {
             [$utcStart, $utcEnd] = $this->books->bounds($start, $to, $tz);
             // Invoice payments and manual income become the same kind of line: who paid, and who brought it in.
@@ -274,7 +299,16 @@ class LedgerService
                 ->groupBy(fn (FundTransfer $t) => $t->transfer_date->format('Y-m-d'));
 
             $deposits = $this->bankDeposits($start, $to)->groupBy(fn (CashDeposit $d) => $d->deposit_date->format('Y-m-d'));
+            $counts = $this->countDifferences($start, $to)->keyBy(fn (OfficeDayClose $c) => $c->close_date->format('Y-m-d'));
         }
+
+        // The office's own end-of-day count for each day, and how far the office has closed (those days are locked).
+        $dayCloses = app(OfficeDayCloseService::class);
+        $latestClose = $dayCloses->latest();
+        $closedThrough = $latestClose?->close_date->format('Y-m-d');
+        $closes = OfficeDayClose::with('closer:id,name')->whereBetween('close_date', [$from, $to])->get()
+            ->keyBy(fn (OfficeDayClose $c) => $c->close_date->format('Y-m-d'))
+            ->map(fn (OfficeDayClose $c) => $dayCloses->present($c, $latestClose));
 
         $sum = fn ($rows, string $b) => (int) collect($rows)->where('book', $b)->sum('amount');
         $opening = $balance;
@@ -338,10 +372,18 @@ class LedgerService
                 'bank_out' => 0,
             ]))->values();
 
+            // The office cash count's shortfall or excess: cash only, nothing moves in the bank.
+            $count = $counts[$d] ?? null;
+            $adjustments = $count ? [[
+                'particulars' => self::countParticulars($count),
+                'cash_in' => max(0, $count->difference),
+                'cash_out' => max(0, -$count->difference),
+            ]] : [];
+
             $totals = [
-                'cash_in' => (int) $in->sum('cash') + (int) $contra->sum('cash_in'),
+                'cash_in' => (int) $in->sum('cash') + (int) $contra->sum('cash_in') + (int) collect($adjustments)->sum('cash_in'),
                 'bank_in' => (int) $in->sum('bank') + (int) $contra->sum('bank_in'),
-                'cash_out' => (int) $out->sum('cash') + (int) $contra->sum('cash_out'),
+                'cash_out' => (int) $out->sum('cash') + (int) $contra->sum('cash_out') + (int) collect($adjustments)->sum('cash_out'),
                 'bank_out' => (int) $out->sum('bank') + (int) $contra->sum('bank_out'),
             ];
             $balance = [
@@ -358,13 +400,16 @@ class LedgerService
                 'receipts' => $in->all(),
                 'payments' => $out->all(),
                 'transfers' => $contra->all(),
+                'adjustments' => $adjustments,
                 'totals' => $totals,
                 'closing' => $balance,
-                'empty' => $in->isEmpty() && $out->isEmpty() && $contra->isEmpty(),
+                'empty' => $in->isEmpty() && $out->isEmpty() && $contra->isEmpty() && ! $adjustments,
+                'office_close' => $closes[$d] ?? null,
+                'locked' => $closedThrough !== null && $d <= $closedThrough,
             ];
         }
 
-        return ['from' => $from, 'to' => $to, 'opening' => $opening, 'days' => $days, 'totals' => $grand, 'closing' => $balance];
+        return ['from' => $from, 'to' => $to, 'opening' => $opening, 'days' => $days, 'totals' => $grand, 'closing' => $balance, 'closed_through' => $closedThrough];
     }
 
     /**

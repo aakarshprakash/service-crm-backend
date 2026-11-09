@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\BooksService;
 use App\Services\CashCloseService;
 use App\Services\LedgerService;
+use App\Services\OfficeDayCloseService;
 use App\Support\TenantContext;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -109,8 +110,14 @@ class BooksController extends Controller
             'bank' => ['required', 'integer', 'min:-10000000000', 'max:10000000000'],
         ]);
         $tenant = app(TenantContext::class)->tenant();
+        // Moving the opening balances rewrites every closed day's figures.
+        $days = app(OfficeDayCloseService::class);
+        $days->assertOpen($data['date'], 'date');
+        if ($old = $tenant->setting('books.opening_date')) {
+            $days->assertOpen($old, 'date');
+        }
         $settings = $tenant->mergedSettings();
-        $settings['books'] = ['opening_date' => $data['date'], 'opening_cash' => $data['cash'], 'opening_bank' => $data['bank']];
+        $settings['books'] =['opening_date' => $data['date'], 'opening_cash' => $data['cash'], 'opening_bank' => $data['bank']];
         $tenant->update(['settings' => $settings]);
 
         return $this->ok($data, 'Opening balances saved.');
@@ -136,6 +143,7 @@ class BooksController extends Controller
             'reference_no' => ['nullable', 'string', 'max:100'],
             'notes' => ['nullable', 'string', 'max:500'],
         ]);
+        app(OfficeDayCloseService::class)->assertOpen($data['transfer_date'], 'transfer_date');
         $transfer = FundTransfer::create($data + ['created_by' => $request->user()->id]);
 
         return $this->created($transfer, $transfer->direction === 'cash_to_bank' ? 'Cash deposit recorded.' : 'Cash withdrawal recorded.');
@@ -143,7 +151,9 @@ class BooksController extends Controller
 
     public function destroyTransfer(int $id): JsonResponse
     {
-        FundTransfer::findOrFail($id)->delete();
+        $transfer = FundTransfer::findOrFail($id);
+        app(OfficeDayCloseService::class)->assertOpen($transfer->transfer_date->toDateString(), 'transfer_date');
+        $transfer->delete();
 
         return $this->ok(null, 'Transfer deleted.');
     }

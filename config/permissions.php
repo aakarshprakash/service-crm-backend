@@ -50,6 +50,8 @@ return [
     'billing.walkin' => $staff,
     'expenses.manage' => ['admin', 'accountant'],
     'accounts.view' => ['admin', 'accountant'],
+    'books.close' => ['admin', 'accountant'], // count the office cash at day end, locking the day's office entries
+    'books.reopen' => ['admin'],              // undo the latest office day close
 
     'assets.view' => [...$staff, 'head_engineer', 'store_keeper'],
     'assets.manage' => ['admin', 'coordinator', 'store_keeper'],

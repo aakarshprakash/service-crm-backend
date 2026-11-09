@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
+use App\Http\Controllers\Api\V1\OfficeDayCloseController;
 use App\Http\Controllers\Api\V1\ExpenseClaimController;
 use App\Http\Controllers\Api\V1\ExpenseController;
 use App\Http\Controllers\Api\V1\IncomeController;
@@ -244,6 +245,10 @@ Route::prefix('v1')->group(function () {
             Route::post('books/transfers', [BooksController::class, 'storeTransfer']);
             Route::delete('books/transfers/{id}', [BooksController::class, 'destroyTransfer'])->whereNumber('id');
         });
+        // The office's end-of-day cash count, which locks the office's entries up to that day.
+        Route::get('books/day-close', [OfficeDayCloseController::class, 'show'])->middleware('can:accounts.view');
+        Route::post('books/day-close', [OfficeDayCloseController::class, 'store'])->middleware('can:books.close');
+        Route::delete('books/day-close/{id}', [OfficeDayCloseController::class, 'destroy'])->whereNumber('id')->middleware('can:books.reopen');
 
         // HR (v2.1): self service for every staff member…
         Route::middleware('can:self.service')->prefix('my')->group(function () {

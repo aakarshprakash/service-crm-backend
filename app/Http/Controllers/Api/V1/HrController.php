@@ -355,6 +355,7 @@ class HrController extends Controller
             'payment_method' => ['required', Rule::in(Expense::METHODS)],
             'paid_on' => ['required', 'date_format:Y-m-d', 'before_or_equal:'.CarbonImmutable::now($this->tenant()->timezone)->toDateString()],
         ]);
+        app(\App\Services\OfficeDayCloseService::class)->assertOpen($data['paid_on'], 'paid_on');
         $run = $this->payroll->pay(PayrollRun::findOrFail($id), $data['payment_method'], $data['paid_on'], $request->user());
 
         return $this->ok($run, 'Salaries marked as paid and added to expenses.');
