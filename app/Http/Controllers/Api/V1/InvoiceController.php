@@ -101,6 +101,11 @@ class InvoiceController extends Controller
             'remarks' => ['nullable', 'string', 'max:500'],
         ]);
         $invoice = Invoice::findOrFail($id);
+        $tz = app(\App\Support\TenantContext::class)->tenant()->timezone;
+        app(\App\Services\OfficeDayCloseService::class)->assertOpen(
+            empty($data['paid_at']) ? null : \Carbon\CarbonImmutable::parse($data['paid_at'], $tz)->timezone($tz)->toDateString(),
+            'paid_at',
+        );
         $payment = $this->payments->recordOffline($invoice, $data['amount'], $data['method'], $data + ['collected_by' => null]);
 
         return $this->created($payment, "Payment recorded. Receipt {$payment->receipt_number}.");

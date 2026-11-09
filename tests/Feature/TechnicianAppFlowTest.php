@@ -36,7 +36,7 @@ class TechnicianAppFlowTest extends TestCase
         $customer = $this->makeCustomer($tenant);
         $product = $this->inTenant($tenant, function () use ($customer, $productAttributes) {
             $p = $customer->products()->first();
-            $p->forceFill($productAttributes + ['product_id' => null, 'model_no' => null, 'category_id' => null])->save();
+            $p->forceFill($productAttributes + ['product_id' => null, 'model_no' => null, 'category_id' => null, 'brand_id' => null])->save();
 
             return $p;
         });
@@ -72,45 +72,66 @@ class TechnicianAppFlowTest extends TestCase
         return $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->assertCreated()->json('data.id');
     }
 
-    public function test_technician_corrects_product_details_including_model_and_category(): void
+    public function test_office_entered_brand_and_type_are_locked_and_the_rest_is_editable(): void
     {
         $category = $this->inTenant($this->ctx['tenant'], fn () => ProductCategory::create(['name' => 'Split AC']));
         $other = $this->inTenant($this->ctx['tenant'], fn () => ProductCategory::create(['name' => 'Fridge']));
-        [$job, $product] = $this->jobWithProduct(['model_no' => 'GLS-18', 'category_id' => $category->id]);
+        $brand = $this->inTenant($this->ctx['tenant'], fn () => \App\Models\Brand::create(['name' => 'Samsung']));
+        [$job, $product] = $this->jobWithProduct(['model_no' => 'GLS-18', 'category_id' => $category->id, 'brand_id' => $brand->id]);
 
         $this->actingAsUser($this->tech)->patchJson("/api/v1/jobs/{$job->id}/details", [
             'serial_no' => 'SN-9', 'purchase_date' => '2026-01-15', 'warranty_type' => 'amc', 'warranty_expiry' => '2027-01-15',
-            'model_no' => 'GLS-18', 'category_id' => $category->id, // unchanged: fine
+            'model_no' => 'gls-18', 'category_id' => $category->id, 'brand_id' => $brand->id, // sent back unchanged: fine
         ])->assertOk();
         $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'serial_no' => 'SN-9', 'warranty_type' => 'amc', 'model_no' => 'GLS-18']);
 
-        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => 'OTHER', 'category_id' => $other->id])->assertOk();
-        $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'model_no' => 'OTHER', 'category_id' => $other->id]);
-        $this->assertDatabaseHas('service_jobs', ['id' => $job->id, 'product_category' => 'Fridge']);
+        // Changing the brand or type the office entered is refused, and nothing in that save is kept.
+        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['category_id' => $other->id, 'serial_no' => 'SN-X'])->assertStatus(422)->assertJsonValidationErrors('category_id');
+        $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'category_id' => $category->id, 'serial_no' => 'SN-9']);
+
+        // The model is the technician's: they read it off the unit.
+        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => 'GLS-24'])->assertOk();
+        $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'model_no' => 'GLS-24']);
 
         // A blank field in a save doesn't wipe what's recorded.
-        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => null, 'category_id' => null])->assertOk();
-        $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'model_no' => 'OTHER', 'category_id' => $other->id]);
+        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => null, 'category_id' => null, 'brand_id' => null])->assertOk();
+        $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'model_no' => 'GLS-24', 'category_id' => $category->id, 'brand_id' => $brand->id]);
     }
 
-    public function test_correcting_a_catalogue_model_keeps_its_brand_and_category_but_drops_the_link(): void
+    public function test_filling_a_gap_on_a_catalogue_unit_keeps_what_the_link_supplied(): void
     {
         $tenant = $this->ctx['tenant'];
         [$catalogue, $brand, $category] = $this->inTenant($tenant, function () {
             $brand = \App\Models\Brand::create(['name' => 'Lloyd']);
             $category = ProductCategory::create(['name' => 'Split AC']);
 
-            return [\App\Models\Product::create(['brand_id' => $brand->id, 'category_id' => $category->id, 'model_name' => 'GLS-18']), $brand, $category];
+            return [\App\Models\Product::create(['brand_id' => $brand->id, 'model_name' => 'GLS-18']), $brand, $category];
         });
         [$job, $product] = $this->jobWithProduct();
         $this->inTenant($tenant, fn () => $product->update(['product_id' => $catalogue->id]));
 
         // Unchanged values sent back leave the link alone.
-        $this->actingAsUser($this->tech)->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => 'gls-18', 'brand_id' => $brand->id, 'category_id' => $category->id, 'serial_no' => 'S1'])->assertOk();
+        $this->actingAsUser($this->tech)->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => 'gls-18', 'brand_id' => $brand->id, 'serial_no' => 'S1'])->assertOk();
         $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'product_id' => $catalogue->id, 'serial_no' => 'S1']);
 
-        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => 'GLS-24'])->assertOk();
+        // A corrected model, and the missing product type: no longer that catalogue model, but its brand is kept.
+        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['model_no' => 'GLS-24', 'category_id' => $category->id])->assertOk();
         $this->assertDatabaseHas('customer_products', ['id' => $product->id, 'product_id' => null, 'model_no' => 'GLS-24', 'brand_id' => $brand->id, 'category_id' => $category->id]);
+    }
+
+    public function test_in_warranty_needs_the_purchase_date(): void
+    {
+        [$job, $product] = $this->jobWithProduct();
+        $this->actingAsUser($this->tech)->patchJson("/api/v1/jobs/{$job->id}/details", ['warranty_type' => 'in_warranty', 'purchase_date' => null])
+            ->assertStatus(422)->assertJsonPath('errors.purchase_date.0', 'Enter the purchase date: the unit is marked in warranty.');
+        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['warranty_type' => 'in_warranty', 'purchase_date' => '2026-02-01'])->assertOk();
+        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['warranty_type' => 'out_of_warranty', 'purchase_date' => null])->assertOk();
+
+        // The office's forms follow the same rule.
+        $this->forgetGuards()->actingAsUser($this->ctx['admin']);
+        $this->patchJson("/api/v1/customers/{$product->customer_id}/products/{$product->id}", ['warranty_type' => 'in_warranty'])->assertStatus(422)->assertJsonValidationErrors('purchase_date');
+        $this->postJson('/api/v1/customers', ['name' => 'Ravi', 'phone' => '9811100777', 'products' => [['warranty_type' => 'in_warranty']]])
+            ->assertStatus(422)->assertJsonValidationErrors('products.0.purchase_date');
     }
 
     public function test_photo_sections_are_set_by_the_company_without_an_app_update(): void
@@ -156,20 +177,19 @@ class TechnicianAppFlowTest extends TestCase
         $this->post("/api/v1/visits/{$visit}/images", ['type' => 'serial', 'image' => $file()], ['Accept' => 'application/json'])->assertCreated();
     }
 
-    public function test_saving_details_keeps_the_offices_formatted_summary_unless_changed(): void
+    public function test_the_complaint_stays_as_the_office_wrote_it(): void
     {
         [$job] = $this->jobWithProduct();
-        $this->inTenant($this->ctx['tenant'], fn () => $job->update(['complaint_details' => '<p><strong>Gas leak</strong> near valve</p>']));
-        $plain = $job->fresh()->complaint_details;
+        $this->inTenant($this->ctx['tenant'], fn () => $job->update(['complaint_details' => '<p><strong>Gas leak</strong> near valve</p>', 'priority' => 'low']));
         $html = $job->fresh()->complaint_details_html;
         $this->assertNotNull($html);
 
-        $this->actingAsUser($this->tech)->patchJson("/api/v1/jobs/{$job->id}/details", ['complaint_details' => $plain, 'serial_no' => 'SN-1'])->assertOk();
-        $this->assertSame($html, $job->fresh()->complaint_details_html);
-
-        $this->patchJson("/api/v1/jobs/{$job->id}/details", ['complaint_details' => 'Now noisy too'])->assertOk();
-        $this->assertNull($job->fresh()->complaint_details_html);
-        $this->assertSame('Now noisy too', $job->fresh()->complaint_details);
+        // Older apps still send the complaint back, changed or not: it's left alone.
+        $this->actingAsUser($this->tech)->patchJson("/api/v1/jobs/{$job->id}/details", ['complaint_details' => 'Now noisy too', 'priority' => 'high', 'serial_no' => 'SN-1'])->assertOk();
+        $fresh = $job->fresh();
+        $this->assertSame($html, $fresh->complaint_details_html);
+        $this->assertSame('low', $fresh->priority);
+        $this->assertDatabaseHas('customer_products', ['id' => $fresh->customer_product_id, 'serial_no' => 'SN-1']);
     }
 
     public function test_missing_model_and_category_can_be_filled_in(): void
@@ -269,6 +289,7 @@ class TechnicianAppFlowTest extends TestCase
         ])->assertOk()->assertJsonPath('data.invoice.is_gst', false)->assertJsonPath('data.invoice.cgst_amount', 0);
 
         // The bill exists now, perhaps with the customer: a later visit can't change its type.
+        $this->allowResume($job->id);
         $second = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->json('data.id');
         $this->postJson("/api/v1/visits/{$second}/complete", [
             'status' => 'pending', 'service_summary' => 'Again', 'labour_charge' => 0, 'payment_method' => 'credit', 'is_gst' => true,

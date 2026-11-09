@@ -6,6 +6,7 @@ use App\Models\Asset;
 use App\Models\AssetAssignment;
 use App\Models\CashClose;
 use App\Models\Expense;
+use App\Models\Income;
 use App\Models\InventoryStock;
 use App\Models\Invoice;
 use App\Models\JobInventoryUsage;
@@ -134,22 +135,26 @@ class ReportService
             ->when($branch, fn ($q, $v) => $q->where('branch_id', $v))
             ->selectRaw('DATE(expense_date) as d, SUM(amount) as t')->groupBy('d')->pluck('t', 'd');
 
+        $otherByDay = Income::query()->whereBetween('income_date', [$from, $to])
+            ->when($branch, fn ($q, $v) => $q->where('branch_id', $v))
+            ->selectRaw('DATE(income_date) as d, SUM(amount) as t')->groupBy('d')->pluck('t', 'd');
         $gstByDay = $books->gstByDay($start, $end, $this->tenant->timezone, $branch);
 
-        $rows = collect(CarbonPeriod::create($from, $to))->map(function ($day) use ($bySource, $expenseByDay, $gstByDay) {
+        $rows = collect(CarbonPeriod::create($from, $to))->map(function ($day) use ($bySource, $expenseByDay, $gstByDay, $otherByDay) {
             $d = $day->format('Y-m-d');
             $src = ($bySource[$d] ?? collect())->pluck('t', 'source');
             $job = (int) ($src['job'] ?? 0);
             $walk = (int) ($src['walk_in'] ?? 0);
             $gst = (int) ($gstByDay[$d] ?? 0);
             $exp = (int) ($expenseByDay[$d] ?? 0);
-            $net = $job + $walk - $gst - $exp;
+            $other = (int) ($otherByDay[$d] ?? 0);
+            $net = $job + $walk + $other - $gst - $exp;
 
-            return ['date' => $d, 'service' => $job, 'walk_in' => $walk, 'income' => $job + $walk, 'gst' => $gst, 'expense' => $exp, 'net' => $net, '_flag' => $net < 0];
+            return ['date' => $d, 'service' => $job, 'walk_in' => $walk, 'other' => $other, 'income' => $job + $walk + $other, 'gst' => $gst, 'expense' => $exp, 'net' => $net, '_flag' => $net < 0];
         })->filter(fn ($r) => $r['income'] || $r['expense'])->values()->take($limit ?? PHP_INT_MAX);
 
         return new ReportResult([
-            'date' => ['Date', 'date'], 'service' => ['Service income', 'money'], 'walk_in' => ['Walk-in income', 'money'],
+            'date' => ['Date', 'date'], 'service' => ['Service income', 'money'], 'walk_in' => ['Walk-in income', 'money'], 'other' => ['Other income', 'money'],
             'income' => ['Total received', 'money'], 'gst' => ['GST in receipts', 'money'], 'expense' => ['Expenses', 'money'], 'net' => ['Net', 'money'],
         ], $rows->all(), [
             'Received' => $this->money($s['income']),

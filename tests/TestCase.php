@@ -76,6 +76,12 @@ abstract class TestCase extends BaseTestCase
         return $user;
     }
 
+    /** The office's go-ahead for the next visit on a job left pending (tested on its own in JobResumeApprovalTest). */
+    protected function allowResume(int $jobId): void
+    {
+        \App\Models\ServiceJob::withoutGlobalScopes()->whereKey($jobId)->update(['resume_approved_at' => now()]);
+    }
+
     protected function actingAsUser(User $user): static
     {
         Sanctum::actingAs($user);

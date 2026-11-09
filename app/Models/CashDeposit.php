@@ -30,4 +30,9 @@ class CashDeposit extends Model
     {
         return $this->belongsTo(User::class, 'recorded_by');
     }
+
+    public function technician(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'technician_id');
+    }
 }

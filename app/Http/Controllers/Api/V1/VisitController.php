@@ -10,6 +10,7 @@ use App\Models\JobVoiceNote;
 use App\Models\ServiceJob;
 use App\Models\TechnicianStock;
 use App\Models\TechnicianStockMove;
+use App\Services\JobService;
 use App\Services\VisitService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -61,7 +62,7 @@ class VisitController extends Controller
             'service_type' => ['sometimes', Rule::in(['on_site', 'tele_call', 'office'])],
             'service_summary' => ['nullable', 'string', 'max:2000'],
             ...$this->callRules(),
-        ]);
+        ], CustomerController::PRODUCT_MESSAGES);
         $visit = $this->visits->updateCallDetails($this->ownVisit($request, $id), $data);
 
         return $this->ok($visit, 'Saved.');
@@ -70,7 +71,7 @@ class VisitController extends Controller
     /** "Check details" before starting: correct the call, address and serials on an assigned job. */
     public function prepare(Request $request, int $jobId): JsonResponse
     {
-        $data = $request->validate($this->callRules());
+        $data = $request->validate($this->callRules(), CustomerController::PRODUCT_MESSAGES);
         $job = $this->visits->prepareJob(ServiceJob::findOrFail($jobId), $request->user(), $data);
 
         return $this->ok($job, 'Details saved.');
@@ -84,6 +85,15 @@ class VisitController extends Controller
             'reason.min' => 'Write a clear reason (at least 10 characters) so the office can decide.',
         ]);
         $job = $this->visits->requestCancel(ServiceJob::findOrFail($jobId), $request->user(), trim($data['reason']));
+
+        return $this->ok($job, 'Sent to the office for approval.');
+    }
+
+    /** Asking the office for the go-ahead on a job I left pending. */
+    public function requestResume(Request $request, int $jobId): JsonResponse
+    {
+        $data = $request->validate(['note' => ['nullable', 'string', 'max:500']]);
+        $job = app(JobService::class)->requestResume(ServiceJob::findOrFail($jobId), $request->user(), $data['note'] ?? null);
 
         return $this->ok($job, 'Sent to the office for approval.');
     }
@@ -118,7 +128,7 @@ class VisitController extends Controller
             'category_id' => ['nullable', 'integer', Rule::exists('product_categories', 'id')->where('tenant_id', $tenantId)],
             'brand_id' => ['nullable', 'integer', Rule::exists('brands', 'id')->where('tenant_id', $tenantId)],
             'dealer_id' => ['nullable', 'integer', Rule::exists('dealers', 'id')->where('tenant_id', $tenantId)],
-            'purchase_date' => ['nullable', 'date', 'before_or_equal:today'],
+            'purchase_date' => ['nullable', 'date', 'before_or_equal:today', 'required_if:warranty_type,in_warranty'],
             'warranty_type' => ['nullable', Rule::in(['in_warranty', 'extended', 'amc', 'out_of_warranty'])],
             'warranty_expiry' => ['nullable', 'date'],
             'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],

@@ -12,6 +12,8 @@ use App\Models\CustomerProduct;
 use App\Models\Dealer;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
+use App\Models\Income;
+use App\Models\IncomeCategory;
 use App\Models\Holiday;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
@@ -46,6 +48,7 @@ class MasterDataController extends Controller
         'branches' => Branch::class,
         'service-locations' => ServiceLocation::class,
         'expense-categories' => ExpenseCategory::class,
+        'income-categories' => IncomeCategory::class,
         'upi-accounts' => UpiAccount::class,
         'leave-types' => LeaveType::class,
         'holidays' => Holiday::class,
@@ -69,6 +72,7 @@ class MasterDataController extends Controller
             'action_taken_options' => $active(ActionTakenOption::class),
             'service_locations' => ServiceLocation::where('is_active', true)->orderBy('name')->get(['id', 'name', 'city', 'pincodes']),
             'expense_categories' => $active(ExpenseCategory::class),
+            'income_categories' => $active(IncomeCategory::class),
             'upi_accounts' => UpiAccount::where('is_active', true)->orderByDesc('is_default')->orderBy('name')->get(['id', 'name', 'vpa', 'payee_name', 'branch_id', 'is_default']),
             'leave_types' => LeaveType::where('is_active', true)->orderBy('name')->get(['id', 'name', 'code', 'annual_quota', 'is_paid']),
             // Models typed on earlier units, most recent first, offered while typing a new one.
@@ -190,6 +194,11 @@ class MasterDataController extends Controller
             $record->update(['is_active' => false]);
 
             return $this->ok($record, 'This leave type has been used, so it was deactivated instead of deleted.');
+        }
+        if ($type === 'income-categories' && Income::where('income_category_id', $record->id)->exists()) {
+            $record->update(['is_active' => false]);
+
+            return $this->ok($record, 'This category has income recorded, so it was deactivated instead of deleted.');
         }
         if ($type === 'expense-categories' && Expense::where('expense_category_id', $record->id)->exists()) {
             $record->update(['is_active' => false]);

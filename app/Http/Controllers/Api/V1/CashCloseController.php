@@ -98,7 +98,8 @@ class CashCloseController extends Controller
             'deposit_date' => ['required', 'date', 'before_or_equal:'.now(app(TenantContext::class)->tenant()->timezone)->toDateString()],
             'remarks' => ['nullable', 'string', 'max:500'],
         ], ['reference_no.required_if' => 'Enter the bank deposit reference.']);
-        $deposit = $this->cash->deposit(CashClose::findOrFail($id), $data, $request->user());
+        app(\App\Services\OfficeDayCloseService::class)->assertOpen($data['deposit_date'], 'deposit_date');
+        $deposit =$this->cash->deposit(CashClose::findOrFail($id), $data, $request->user());
 
         return $this->created($deposit, 'Deposit recorded.');
     }

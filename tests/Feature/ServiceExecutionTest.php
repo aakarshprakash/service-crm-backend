@@ -120,6 +120,7 @@ class ServiceExecutionTest extends TestCase
         $this->getJson("/api/v1/jobs/{$job->id}")->assertJsonPath('data.status', 'pending');
 
         // Pending → In progress with a second visit; invoice accumulates both visits.
+        $this->allowResume($job->id);
         $v2 = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->assertCreated()->json('data.id');
         $action = $this->inTenant($tenant, fn () => ActionTakenOption::first());
         $this->postJson("/api/v1/visits/{$v2}/complete", [

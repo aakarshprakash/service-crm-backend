@@ -104,6 +104,10 @@ class WalkInBillService
             $method = $data['payment_method'] ?? null;
             $paid = (int) ($data['amount_paid'] ?? 0);
             if ($method && $method !== 'credit' && $paid > 0) {
+                // Money taken at the office counter after today's office close would miss the count.
+                if (! $by->isTechnician()) {
+                    app(OfficeDayCloseService::class)->assertOpen(null, 'amount_paid');
+                }
                 $this->payments->recordOffline($invoice, $paid, $method, [
                     'reference_no' => $data['reference_no'] ?? null,
                     'collected_by' => $by->id,

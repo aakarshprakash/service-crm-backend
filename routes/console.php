@@ -6,6 +6,7 @@ use App\Models\ReportExport;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\DayEndService;
 use App\Services\NotificationService;
 use App\Support\TenantContext;
 use Illuminate\Support\Facades\Schedule;
@@ -49,6 +50,19 @@ Schedule::call(function (NotificationService $notifications, TenantContext $cont
         });
     });
 })->name('jobs-attention')->dailyAt('09:30')->timezone('Asia/Kolkata')->withoutOverlapping();
+
+// End of day, at the time each company set: punch out anyone still punched in, close visits left running.
+Schedule::call(function (DayEndService $dayEnd, TenantContext $context) {
+    Tenant::whereIn('status', ['trial', 'active'])->each(function (Tenant $tenant) use ($dayEnd, $context) {
+        if (! $tenant->setting('attendance.auto_punch_out_at') && ! $tenant->setting('jobs.auto_close_visits_at')) {
+            return;
+        }
+        $context->runAs($tenant->id, function () use ($tenant, $dayEnd) {
+            $dayEnd->autoCloseVisits($tenant);
+            $dayEnd->autoPunchOut($tenant);
+        });
+    });
+})->name('day-end')->everyFiveMinutes()->withoutOverlapping();
 
 // Housekeeping.
 Schedule::call(fn () => OtpCode::where('expires_at', '<', now()->subDay())->delete())->name('prune-otps')->daily();

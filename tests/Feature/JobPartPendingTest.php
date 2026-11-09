@@ -109,7 +109,9 @@ class JobPartPendingTest extends TestCase
         $this->getJson('/api/v1/dashboard/technician')->assertOk()
             ->assertJsonPath('data.counts.part_pending', 1)->assertJsonCount(0, 'data.today');
 
-        // The technician may carry the part along and start straight away.
+        // The office says when the technician goes back; then they may carry the part along and start straight away.
+        $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->assertStatus(422)->assertJsonValidationErrors('job');
+        $this->allowResume($job->id);
         $v2 = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->assertCreated()->json('data.id');
         $this->assertNotSame($v1, $v2);
         $this->getJson("/api/v1/jobs/{$job->id}")->assertJsonPath('data.status', 'in_progress')->assertJsonPath('data.part_pending_note', null);

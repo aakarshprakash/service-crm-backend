@@ -36,6 +36,7 @@ return [
     'jobs.view' => [...$staff, 'head_engineer', 'service_tracker', 'store_keeper', 'technician'],
     'jobs.manage' => ['admin', 'coordinator', 'head_engineer', 'service_tracker'],
     'jobs.approve_cancel' => ['admin', 'coordinator', 'head_engineer'], // decides a technician's request to cancel
+    'jobs.approve_resume' => ['admin', 'coordinator', 'head_engineer'], // lets a technician go back to a job they left pending
     'visits.execute' => ['technician'],
     'punch' => [...$office, 'technician'], // v2.1: office staff punch too (geo-fenced attendance)
 
@@ -49,6 +50,8 @@ return [
     'billing.walkin' => $staff,
     'expenses.manage' => ['admin', 'accountant'],
     'accounts.view' => ['admin', 'accountant'],
+    'books.close' => ['admin', 'accountant'], // count the office cash at day end, locking the day's office entries
+    'books.reopen' => ['admin'],              // undo the latest office day close
 
     'assets.view' => [...$staff, 'head_engineer', 'store_keeper'],
     'assets.manage' => ['admin', 'coordinator', 'store_keeper'],

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Expense;
+use App\Models\Income;
 use App\Models\Invoice;
 use App\Models\Payment;
 use Carbon\CarbonImmutable;
@@ -32,8 +33,18 @@ class BooksService
             ->when($branchId, fn ($q) => $q->where('invoices.branch_id', $branchId));
         $expenses = Expense::query()->whereBetween('expense_date', [$from, $to])
             ->when($branchId, fn ($q) => $q->where('expenses.branch_id', $branchId));
+        // Money received without an invoice (manual income).
+        $incomes = Income::query()->whereBetween('income_date', [$from, $to])
+            ->when($branchId, fn ($q) => $q->where('incomes.branch_id', $branchId));
 
         $incomeByMethod = (clone $payments)->selectRaw('payments.method, SUM(payments.amount) as t')->groupBy('payments.method')->pluck('t', 'method')->map(fn ($v) => (int) $v);
+        $manualByMethod = (clone $incomes)->selectRaw('payment_method, SUM(amount) as t')->groupBy('payment_method')->pluck('t', 'payment_method')->map(fn ($v) => (int) $v);
+        foreach ($manualByMethod as $method => $amount) {
+            $incomeByMethod[$method] = ($incomeByMethod[$method] ?? 0) + $amount;
+        }
+        $incomeByCategory = (clone $incomes)->leftJoin('income_categories as ic', 'ic.id', '=', 'incomes.income_category_id')
+            ->selectRaw("COALESCE(ic.name, 'Other income') as category, SUM(incomes.amount) as t")
+            ->groupBy('category')->orderByDesc('t')->pluck('t', 'category')->map(fn ($v) => (int) $v);
         $incomeBySource = (clone $payments)->selectRaw('invoices.source, SUM(payments.amount) as t')->groupBy('invoices.source')->pluck('t', 'source')->map(fn ($v) => (int) $v);
         $expenseByMethod = (clone $expenses)->selectRaw('payment_method, SUM(amount) as t')->groupBy('payment_method')->pluck('t', 'payment_method')->map(fn ($v) => (int) $v);
         $expenseByCategory = (clone $expenses)->leftJoin('expense_categories as c', 'c.id', '=', 'expenses.expense_category_id')
@@ -45,10 +56,11 @@ class BooksService
         $dailyIncome = (clone $payments)->selectRaw("DATE(CONVERT_TZ(payments.paid_at, '+00:00', ?)) as d, SUM(payments.amount) as t", [$offset])
             ->groupBy('d')->pluck('t', 'd');
         $dailyExpense = (clone $expenses)->selectRaw('DATE(expense_date) as d, SUM(amount) as t')->groupBy('d')->pluck('t', 'd');
+        $dailyManual = (clone $incomes)->selectRaw('DATE(income_date) as d, SUM(amount) as t')->groupBy('d')->pluck('t', 'd');
         $days = collect(CarbonPeriod::create($from, $to))->map(fn ($d) => $d->format('Y-m-d'));
         $series = $days->count() <= 92 ? $days->map(fn ($d) => [
             'date' => $d,
-            'income' => (int) ($dailyIncome[$d] ?? 0),
+            'income' => (int) ($dailyIncome[$d] ?? 0) + (int) ($dailyManual[$d] ?? 0),
             'expense' => (int) ($dailyExpense[$d] ?? 0),
         ])->values() : collect();
 
@@ -66,7 +78,8 @@ class BooksService
             'expense' => $expense,
             'net' => $income - $gst - $expense,
             'income_by_method' => $incomeByMethod,
-            'income_by_source' => ['job' => (int) ($incomeBySource['job'] ?? 0), 'walk_in' => (int) ($incomeBySource['walk_in'] ?? 0)],
+            'income_by_source' => ['job' => (int) ($incomeBySource['job'] ?? 0), 'walk_in' => (int) ($incomeBySource['walk_in'] ?? 0), 'other' => (int) $manualByMethod->sum()],
+            'income_by_category' => $incomeByCategory,
             'expense_by_method' => $expenseByMethod,
             'expense_by_category' => $expenseByCategory,
             'cash' => ['in' => $cashIn, 'out' => $cashOut, 'net' => $cashIn - $cashOut],
@@ -166,6 +179,20 @@ class BooksService
                 'out' => (int) $e->amount,
             ]);
 
-        return $in->concat($out)->sortBy('at')->values()->all();
+        $manual = Income::query()->whereBetween('income_date', [$from, $to])
+            ->when($branchId, fn ($q) => $q->where('branch_id', $branchId))
+            ->with('category:id,name')->orderBy('income_date')->orderBy('id')->get()
+            ->map(fn (Income $i) => [
+                'at' => $i->income_date->format('Y-m-d').' 00:00',
+                'kind' => 'Other income',
+                'ref' => $i->reference_no,
+                'party' => $i->received_from,
+                'details' => trim(($i->category?->name ?? 'Other income').($i->description ? ' — '.$i->description : '')),
+                'method' => $i->payment_method,
+                'in' => (int) $i->amount,
+                'out' => 0,
+            ]);
+
+        return $in->concat($manual)->concat($out)->sortBy('at')->values()->all();
     }
 }

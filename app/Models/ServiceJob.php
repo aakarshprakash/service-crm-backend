@@ -30,7 +30,7 @@ class ServiceJob extends Model
         'created_by', 'parent_job_id', 'completed_at', 'cancelled_at', 'cancel_reason',
     ];
 
-    protected $appends = ['call_age_days'];
+    protected $appends = ['call_age_days', 'needs_resume_approval'];
 
     /** The customer's share-location link is handed out by the office, never in job payloads. */
     protected $hidden = ['location_token'];
@@ -42,6 +42,8 @@ class ServiceJob extends Model
             'scheduled_at' => 'datetime',
             'part_pending_at' => 'datetime',
             'cancel_requested_at' => 'datetime',
+            'resume_requested_at' => 'datetime',
+            'resume_approved_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
         ];
@@ -84,6 +86,30 @@ class ServiceJob extends Model
         return (int) $this->created_at->copy()->timezone($tz)->startOfDay()->diffInDays($end->copy()->timezone($tz)->startOfDay());
     }
 
+    /**
+     * Left pending or part pending by a technician: the next visit needs the office's go-ahead
+     * (Settings → Technician app). A job that was never visited, e.g. parked for a part before anyone went, doesn't.
+     */
+    public function getNeedsResumeApprovalAttribute(): bool
+    {
+        if (! array_key_exists('status', $this->attributes) || ! array_key_exists('resume_approved_at', $this->attributes)) {
+            return false;
+        }
+        if (! in_array($this->status, [JobStatus::Pending, JobStatus::PartPending], true) || $this->resume_approved_at) {
+            return false;
+        }
+        if (! (app(TenantContext::class)->tenant()?->setting('jobs.resume_needs_approval') ?? true)) {
+            return false;
+        }
+
+        // Lists load `visits_exists` with the jobs, so this doesn't run a query per job.
+        if (array_key_exists('visits_exists', $this->attributes)) {
+            return (bool) $this->attributes['visits_exists'];
+        }
+
+        return $this->relationLoaded('visits') ? $this->visits->isNotEmpty() : $this->visits()->exists();
+    }
+
     /** An unfinished job this many days old counts as an old job (Settings → Preferences). */
     public static function agedDays(): int
     {
@@ -110,6 +136,23 @@ class ServiceJob extends Model
             'no_location' => $query->whereNull('service_location_id')->whereIn('status', $unfinished),
             default => $query,
         };
+    }
+
+    /**
+     * For the technician's app: completed and cancelled jobs drop out after the days set in Settings → Technician app.
+     * They stay on record (reports, the office, the customer's history); 0 days keeps them in the app.
+     */
+    public function scopeClosedRecently(Builder $query): Builder
+    {
+        $days = (int) (app(TenantContext::class)->tenant()?->setting('jobs.tech_hide_closed_after_days') ?? 2);
+        if ($days <= 0) {
+            return $query;
+        }
+        $since = now()->subDays($days);
+
+        return $query->where(fn (Builder $q) => $q->whereNotIn('status', [JobStatus::Completed->value, JobStatus::Cancelled->value])
+            ->orWhere('completed_at', '>=', $since)
+            ->orWhere('cancelled_at', '>=', $since));
     }
 
     public function scopeSearch(Builder $query, ?string $term): Builder

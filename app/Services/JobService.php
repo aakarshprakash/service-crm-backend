@@ -172,8 +172,69 @@ class JobService
         $job->cancel_requested_by = null;
         $job->cancel_requested_at = null;
         $this->transition($job, JobStatus::Pending, $by->id, "Cancellation rejected: $note");
+        // The office has just said the work goes ahead: that is the go-ahead for the next visit.
+        $this->grantResume($job, $by);
 
         return $job;
+    }
+
+    /** The technician asks to go back to a job they left pending. It stays assigned to them meanwhile. */
+    public function requestResume(ServiceJob $job, User $technician, ?string $note): ServiceJob
+    {
+        if ($job->assigned_technician_id !== $technician->id) {
+            throw ValidationException::withMessages(['job' => 'This job is not assigned to you.']);
+        }
+        if (! $job->needs_resume_approval) {
+            throw ValidationException::withMessages(['job' => 'This job doesn’t need approval. You can start it.']);
+        }
+        $note = $note !== null && trim($note) !== '' ? mb_substr(trim($note), 0, 500) : null;
+        $job->forceFill(['resume_requested_at' => now(), 'resume_request_note' => $note])->save();
+        $this->history($job, $job->status, $technician->id, 'Asked to resume the job'.($note ? ": $note" : ''));
+
+        User::inTenant($job->tenant_id)->whereIn('role', config('permissions')['jobs.approve_resume'])->where('status', 'active')->get()->each(
+            fn (User $approver) => $this->notifications->notifyUser($approver, 'job_resume_requested', 'Job waiting to resume', "{$technician->name} asked to resume job {$job->crm_call_id}".($note ? ": $note" : '.'), ['job_id' => $job->id])
+        );
+
+        return $job;
+    }
+
+    /** The office lets the technician start the next visit. Approving without a request is fine too. */
+    public function approveResume(ServiceJob $job, User $by, ?string $note = null): ServiceJob
+    {
+        if (! $job->needs_resume_approval) {
+            throw ValidationException::withMessages(['status' => 'This job isn’t waiting for approval to resume.']);
+        }
+        $this->grantResume($job, $by);
+        $this->history($job, $job->status, $by->id, 'Approved to resume'.($note ? ": $note" : ''));
+        $this->notifyResume($job, 'job_resume_approved', 'Job approved to resume', "You can start job {$job->crm_call_id} again.".($note ? " $note" : ''));
+
+        return $job;
+    }
+
+    /** Not yet: the request is cleared and the technician told why. The job stays pending with them. */
+    public function rejectResume(ServiceJob $job, string $note, User $by): ServiceJob
+    {
+        if (! $job->needs_resume_approval) {
+            throw ValidationException::withMessages(['status' => 'This job isn’t waiting for approval to resume.']);
+        }
+        $job->forceFill(['resume_requested_at' => null, 'resume_request_note' => null])->save();
+        $this->history($job, $job->status, $by->id, "Resume not approved: $note");
+        $this->notifyResume($job, 'job_resume_rejected', 'Job not approved to resume', "Job {$job->crm_call_id}: {$note}");
+
+        return $job;
+    }
+
+    /** The go-ahead for one more visit. Starting that visit uses it up. */
+    private function grantResume(ServiceJob $job, User $by): void
+    {
+        $job->forceFill(['resume_approved_at' => now(), 'resume_approved_by' => $by->id, 'resume_requested_at' => null, 'resume_request_note' => null])->save();
+    }
+
+    private function notifyResume(ServiceJob $job, string $type, string $title, string $message): void
+    {
+        if ($job->assigned_technician_id && $tech = User::inTenant($job->tenant_id)->find($job->assigned_technician_id)) {
+            $this->notifications->notifyUser($tech, $type, $title, $message, ['job_id' => $job->id]);
+        }
     }
 
     private function notifyCancelRequester(ServiceJob $job, string $type, string $title, string $message): void
@@ -210,6 +271,7 @@ class JobService
             throw ValidationException::withMessages(['status' => 'This job is not waiting for a part.']);
         }
         $this->transition($job, $job->visits()->exists() ? JobStatus::Pending : JobStatus::Open, $by->id, 'Part received');
+        $this->grantResume($job, $by);
 
         if ($job->assigned_technician_id && $tech = User::inTenant()->find($job->assigned_technician_id)) {
             $this->notifications->notifyUser($tech, 'part_received', 'Part received', "The part for job {$job->crm_call_id} has arrived. The job is ready for a visit.", ['job_id' => $job->id]);

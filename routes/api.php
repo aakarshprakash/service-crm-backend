@@ -3,8 +3,10 @@
 use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
+use App\Http\Controllers\Api\V1\OfficeDayCloseController;
 use App\Http\Controllers\Api\V1\ExpenseClaimController;
 use App\Http\Controllers\Api\V1\ExpenseController;
+use App\Http\Controllers\Api\V1\IncomeController;
 use App\Http\Controllers\Api\V1\HrController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CashCloseController;
@@ -172,6 +174,10 @@ Route::prefix('v1')->group(function () {
             Route::post('jobs/{id}/cancel/approve', [JobController::class, 'approveCancel'])->whereNumber('id');
             Route::post('jobs/{id}/cancel/reject', [JobController::class, 'rejectCancel'])->whereNumber('id');
         });
+        Route::middleware('can:jobs.approve_resume')->group(function () {
+            Route::post('jobs/{id}/resume/approve', [JobController::class, 'approveResume'])->whereNumber('id');
+            Route::post('jobs/{id}/resume/reject', [JobController::class, 'rejectResume'])->whereNumber('id');
+        });
         Route::middleware('can:jobs.manage')->group(function () {
             Route::post('jobs', [JobController::class, 'store']);
             Route::patch('jobs/{id}', [JobController::class, 'update'])->whereNumber('id');
@@ -191,6 +197,7 @@ Route::prefix('v1')->group(function () {
             Route::post('jobs/{id}/visits/start', [VisitController::class, 'start'])->whereNumber('id');
             Route::patch('jobs/{id}/details', [VisitController::class, 'prepare'])->whereNumber('id');
             Route::post('jobs/{id}/cancel-request', [VisitController::class, 'requestCancel'])->whereNumber('id');
+            Route::post('jobs/{id}/resume-request', [VisitController::class, 'requestResume'])->whereNumber('id')->middleware('throttle:10,1');
             Route::post('jobs/{id}/customer-location', [JobLocationController::class, 'fromJob'])->whereNumber('id');
             Route::get('my/parts', [VisitController::class, 'myParts']);
             Route::get('visits/active', [VisitController::class, 'active']);
@@ -215,6 +222,10 @@ Route::prefix('v1')->group(function () {
             Route::post('expenses', [ExpenseController::class, 'store']);
             Route::patch('expenses/{id}', [ExpenseController::class, 'update'])->whereNumber('id');
             Route::delete('expenses/{id}', [ExpenseController::class, 'destroy'])->whereNumber('id');
+            Route::get('incomes', [IncomeController::class, 'index']);
+            Route::post('incomes', [IncomeController::class, 'store']);
+            Route::patch('incomes/{id}', [IncomeController::class, 'update'])->whereNumber('id');
+            Route::delete('incomes/{id}', [IncomeController::class, 'destroy'])->whereNumber('id');
             Route::get('expense-claims', [ExpenseClaimController::class, 'index']);
             Route::post('expense-claims/{id}/approve', [ExpenseClaimController::class, 'approve'])->whereNumber('id');
             Route::post('expense-claims/{id}/reject', [ExpenseClaimController::class, 'reject'])->whereNumber('id');
@@ -224,6 +235,7 @@ Route::prefix('v1')->group(function () {
             Route::get('books/day-book', [BooksController::class, 'dayBook']);
             Route::get('books/overview', [BooksController::class, 'overview']);
             Route::get('books/ledger', [BooksController::class, 'ledger']);
+            Route::get('books/register', [BooksController::class, 'register']);
             Route::get('books/receivables', [BooksController::class, 'receivables']);
             Route::get('books/profit-loss', [BooksController::class, 'profitLoss']);
             Route::get('books/transfers', [BooksController::class, 'transfers']);
@@ -233,6 +245,10 @@ Route::prefix('v1')->group(function () {
             Route::post('books/transfers', [BooksController::class, 'storeTransfer']);
             Route::delete('books/transfers/{id}', [BooksController::class, 'destroyTransfer'])->whereNumber('id');
         });
+        // The office's end-of-day cash count, which locks the office's entries up to that day.
+        Route::get('books/day-close', [OfficeDayCloseController::class, 'show'])->middleware('can:accounts.view');
+        Route::post('books/day-close', [OfficeDayCloseController::class, 'store'])->middleware('can:books.close');
+        Route::delete('books/day-close/{id}', [OfficeDayCloseController::class, 'destroy'])->whereNumber('id')->middleware('can:books.reopen');
 
         // HR (v2.1): self service for every staff member…
         Route::middleware('can:self.service')->prefix('my')->group(function () {
