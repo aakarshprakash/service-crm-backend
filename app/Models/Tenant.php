@@ -44,10 +44,16 @@ class Tenant extends Model
         // resume_needs_approval: a job a technician left pending / part pending waits for the office before the next visit.
         // auto_close_visits_at: HH:MM (company time) when visits still running are closed as pending, remark "Auto closed"; null = never.
         // tech_hide_closed_after_days: completed and cancelled jobs leave the technician's app after this many days; 0 = keep them.
+        // tech_keep_until_feedback: a completed job stays in the technician's app until the customer's feedback is taken.
         'jobs' => [
             'require_signature' => false, 'require_punch_in' => true, 'age_warning' => 3, 'age_old' => 7, 'age_critical' => 14,
             'resume_needs_approval' => true, 'auto_close_visits_at' => null, 'tech_hide_closed_after_days' => 2,
+            'tech_keep_until_feedback' => true,
         ],
+        // What the technician app shows. show_leave: the leave card (balances, apply) on the Me tab.
+        'tech_app' => ['show_leave' => false],
+        // Permanent deletion of test entries. Switched on and off in Settings with the admin's password, never through preferences.
+        'hard_delete' => ['enabled' => false, 'enabled_by' => null, 'enabled_at' => null],
         // Geo-fenced attendance: off | flag (record outside punches) | enforce (block them).
         // auto_punch_out_at: HH:MM (company time) when anyone still punched in is punched out; null = never.
         'attendance' => ['geofence' => 'off', 'geofence_technicians' => false, 'require_location' => false, 'auto_punch_out_at' => null],
@@ -57,6 +63,9 @@ class Tenant extends Model
         // Printed on invoices, for customers paying by bank transfer.
         'bank' => ['account_name' => null, 'bank_name' => null, 'account_no' => null, 'ifsc' => null, 'branch' => null],
         'invoice_template' => 'classic', // classic | modern
+        // Estimates: letters before the number, how many days one stays valid, and the terms printed on it (null = the standard ones).
+        'estimate_prefix' => 'EST',
+        'estimates' => ['valid_days' => 15, 'terms' => null],
         // Photo sections on a visit, [{key, label}]; null means DEFAULT_PHOTO_TYPES. Companies add their own, no app update needed.
         'photo_types' => null,
         // Every section name used, by key: photos in a section removed later still show its name.

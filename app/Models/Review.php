@@ -12,6 +12,14 @@ class Review extends Model
 
     protected $fillable = ['job_id', 'customer_id', 'technician_id', 'rating', 'comment'];
 
+    protected static function booted(): void
+    {
+        // A rating on the portal is the customer's feedback on the job.
+        static::created(function (Review $review) {
+            ServiceJob::whereKey($review->job_id)->whereNull('feedback_taken_at')->update(['feedback_taken_at' => now()]);
+        });
+    }
+
     protected function casts(): array
     {
         return [

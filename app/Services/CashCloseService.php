@@ -260,10 +260,38 @@ class CashCloseService
 
     public function cashInHand(User $technician): int
     {
-        $unclosed = (int) $this->unclosedPayments($technician, now()->addDay())->whereIn('method', self::IN_HAND)->sum('amount');
-        $spent = (int) $this->unclosedClaims($technician, null)->sum('amount');
+        return $this->cashInHandFor([$technician->id])[$technician->id];
+    }
 
-        return $this->carryForward($technician) + $unclosed - $spent;
+    /**
+     * Cash each of these technicians is holding right now, in a fixed handful of queries however many
+     * technicians there are: screens that list everyone would otherwise run several queries per person.
+     *
+     * @param  iterable<int>  $technicianIds
+     * @return array<int, int> technician id => paise
+     */
+    public function cashInHandFor(iterable $technicianIds): array
+    {
+        $ids = collect($technicianIds)->map(fn ($id) => (int) $id)->unique()->values();
+        if ($ids->isEmpty()) {
+            return [];
+        }
+        // What earlier closes left with them: collections + discrepancies − expenses, less what they deposited since.
+        $closes = CashClose::query()->whereIn('technician_id', $ids)->groupBy('technician_id')
+            ->selectRaw('technician_id, SUM(total_cash_collected + total_cheque_collected + discrepancy_amount - total_expenses) as carried')
+            ->pluck('carried', 'technician_id');
+        $deposited = CashDeposit::query()->whereIn('technician_id', $ids)->groupBy('technician_id')
+            ->selectRaw('technician_id, SUM(amount) as total')->pluck('total', 'technician_id');
+        // Collected and spent since their last close.
+        $unclosed = Payment::query()->whereIn('collected_by', $ids)->where('status', 'success')->whereNull('cash_close_id')
+            ->whereIn('method', self::IN_HAND)->where('paid_at', '<=', now()->addDay())
+            ->groupBy('collected_by')->selectRaw('collected_by, SUM(amount) as total')->pluck('total', 'collected_by');
+        $spent = ExpenseClaim::query()->whereIn('user_id', $ids)->where('paid_from', 'cash_in_hand')->where('status', '!=', 'rejected')
+            ->whereNull('cash_close_id')->groupBy('user_id')->selectRaw('user_id, SUM(amount) as total')->pluck('total', 'user_id');
+
+        return $ids->mapWithKeys(fn (int $id) => [
+            $id => (int) ($closes[$id] ?? 0) - (int) ($deposited[$id] ?? 0) + (int) ($unclosed[$id] ?? 0) - (int) ($spent[$id] ?? 0),
+        ])->all();
     }
 
     private function recalculate(CashClose $close): void

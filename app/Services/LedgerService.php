@@ -57,7 +57,7 @@ class LedgerService
         $before = CarbonImmutable::parse($from)->subDay()->toDateString();
         $carried = $opening[$book];
         if (! $since || $since <= $before) {
-            $carried += $this->net($this->movements($tenant, $book, $since ?? '2000-01-01', $before));
+            $carried += $this->netBetween($tenant, $book, $since ?? '2000-01-01', $before);
         }
 
         $start = $since && $since > $from ? $since : $from;
@@ -84,7 +84,40 @@ class LedgerService
         $today = CarbonImmutable::now($tenant->timezone)->toDateString();
         $since = $this->opening($tenant)['date'] ?? '2000-01-01';
 
-        return $this->opening($tenant)[$book] + ($since <= $today ? $this->net($this->movements($tenant, $book, $since, $today)) : 0);
+        return $this->opening($tenant)[$book] + ($since <= $today ? $this->netBetween($tenant, $book, $since, $today) : 0);
+    }
+
+    /**
+     * What a book gained or lost between local dates (inclusive), added up by the database.
+     *
+     * The same figure as net(movements()), which reads every entry into memory: fine for the page being shown,
+     * far too slow for "everything since the books opened", which every balance needs.
+     */
+    public function netBetween(Tenant $tenant, string $book, string $from, string $to): int
+    {
+        [$start, $end] = $this->books->bounds($from, $to, $tenant->timezone);
+        $methods = self::methodsFor($book);
+
+        $receipts = (int) Payment::query()->where('payments.status', 'success')->whereIn('payments.method', $methods)
+            ->whereBetween('payments.paid_at', [$start, $end])
+            ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')->sum('payments.amount');
+        $income = (int) Income::query()->whereIn('payment_method', $methods)->whereBetween('income_date', [$from, $to])->sum('amount');
+        $expenses = (int) Expense::query()->whereIn('payment_method', $methods)->whereBetween('expense_date', [$from, $to])->sum('amount');
+        // Contra entries: into the bank from cash, or the other way round.
+        $toBank = (int) FundTransfer::query()->where('direction', 'cash_to_bank')->whereBetween('transfer_date', [$from, $to])->sum('amount')
+            + (int) CashDeposit::query()->where('deposited_to', 'bank')->whereBetween('deposit_date', [$from, $to])->sum('amount');
+        $toCash = (int) FundTransfer::query()->where('direction', 'bank_to_cash')->whereBetween('transfer_date', [$from, $to])->sum('amount');
+        $moved = $book === 'bank' ? $toBank - $toCash : $toCash - $toBank;
+        // Office cash counts that came out short or extra are posted to the cash book.
+        $counts = $book === 'cash' ? (int) OfficeDayClose::query()->whereBetween('close_date', [$from, $to])->sum('difference') : 0;
+
+        return $receipts + $income - $expenses + $moved + $counts;
+    }
+
+    /** The slow, entry-by-entry sum: kept so tests can hold netBetween() to it. */
+    public function netOfMovements(Tenant $tenant, string $book, string $from, string $to): int
+    {
+        return $this->net($this->movements($tenant, $book, $from, $to));
     }
 
     private function net(Collection $movements): int
@@ -228,6 +261,7 @@ class LedgerService
         $expenses = collect();
         $transfers = collect();
         $deposits = collect();
+        $handovers = collect();
         $counts = collect();
         if ($start <= $to) {
             [$utcStart, $utcEnd] = $this->books->bounds($start, $to, $tz);
@@ -299,6 +333,9 @@ class LedgerService
                 ->groupBy(fn (FundTransfer $t) => $t->transfer_date->format('Y-m-d'));
 
             $deposits = $this->bankDeposits($start, $to)->groupBy(fn (CashDeposit $d) => $d->deposit_date->format('Y-m-d'));
+            // Cash technicians handed to the office: it stays cash, so it is shown for information and changes no total.
+            $handovers = CashDeposit::query()->where('deposited_to', 'office')->whereBetween('deposit_date', [$start, $to])
+                ->with('technician:id,name')->orderBy('id')->get()->groupBy(fn (CashDeposit $d) => $d->deposit_date->format('Y-m-d'));
             $counts = $this->countDifferences($start, $to)->keyBy(fn (OfficeDayClose $c) => $c->close_date->format('Y-m-d'));
         }
 
@@ -401,6 +438,11 @@ class LedgerService
                 'payments' => $out->all(),
                 'transfers' => $contra->all(),
                 'adjustments' => $adjustments,
+                'handovers' => collect($handovers[$d] ?? [])->groupBy('technician_id')->map(fn ($rows) => [
+                    'technician_id' => $rows->first()->technician_id,
+                    'technician' => $rows->first()->technician?->name ?? 'Technician',
+                    'amount' => (int) $rows->sum('amount'),
+                ])->values()->all(),
                 'totals' => $totals,
                 'closing' => $balance,
                 'empty' => $in->isEmpty() && $out->isEmpty() && $contra->isEmpty() && ! $adjustments,

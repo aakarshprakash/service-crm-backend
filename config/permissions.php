@@ -25,6 +25,7 @@ return [
     'users.view' => ['admin', 'coordinator', 'head_engineer', 'hr_executive'],
     'users.manage' => ['admin'],
     'settings.manage' => ['admin'],
+    'records.hard_delete' => ['admin'], // permanent delete of test entries, once switched on in Settings
     'master.view' => [...$office, 'technician'],
     'master.manage' => ['admin'],
     'master.quick_add' => ['admin', 'coordinator', 'head_engineer', 'service_tracker'], // brand / model from the job form
@@ -46,6 +47,9 @@ return [
     'hr.manage' => ['admin', 'hr_executive'],                                // correct attendance
     'leave.approve' => ['admin', 'coordinator', 'head_engineer', 'hr_executive'],
     'payroll.manage' => ['admin', 'accountant', 'hr_executive'],             // salaries, employee HR details, payroll
+
+    'estimates.view' => [...$staff, 'head_engineer', 'service_tracker'],
+    'estimates.manage' => [...$staff, 'head_engineer', 'service_tracker'], // create, send and record the customer's answer
 
     'billing.walkin' => $staff,
     'expenses.manage' => ['admin', 'accountant'],

@@ -5,7 +5,7 @@ namespace App\Models;
 use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\URL;
+use App\Support\SignedUrl;
 
 /** A voice note recorded by the technician during a visit (private disk, signed URL). */
 class JobVoiceNote extends Model
@@ -25,7 +25,7 @@ class JobVoiceNote extends Model
 
     public function getUrlAttribute(): ?string
     {
-        return $this->id ? URL::temporarySignedRoute('files.voice', now()->addMinutes(60), ['note' => $this->id]) : null;
+        return $this->id ? SignedUrl::stable('files.voice', ['note' => $this->id], 60) : null;
     }
 
     public function uploader(): BelongsTo

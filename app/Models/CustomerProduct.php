@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -61,8 +62,33 @@ class CustomerProduct extends Model
         return $this->belongsTo(Dealer::class);
     }
 
+    /** Warranty types that mean the unit is covered when no expiry date is on record. */
+    public const COVERED_TYPES = ['in_warranty', 'extended', 'amc'];
+
+    /**
+     * Covered until the expiry date when one is known. Without a date, the unit is taken at its word:
+     * marked in warranty, extended or AMC means covered.
+     */
     public function isUnderWarranty(): bool
     {
-        return $this->warranty_expiry !== null && $this->warranty_expiry->endOfDay()->isFuture();
+        if ($this->warranty_expiry !== null) {
+            return $this->warranty_expiry->endOfDay()->isFuture();
+        }
+
+        return in_array($this->warranty_type, self::COVERED_TYPES, true);
+    }
+
+    /** Units covered on $today (Y-m-d where the company is): the same rule as isUnderWarranty(). */
+    public function scopeUnderWarranty(Builder $query, string $today): Builder
+    {
+        return $query->where(fn (Builder $q) => $q->where('warranty_expiry', '>=', $today)
+            ->orWhere(fn (Builder $q) => $q->whereNull('warranty_expiry')->whereIn('warranty_type', self::COVERED_TYPES)));
+    }
+
+    /** Units known to be out of cover on $today: an expiry date that has passed, or marked out of warranty. */
+    public function scopeOutOfWarranty(Builder $query, string $today): Builder
+    {
+        return $query->where(fn (Builder $q) => $q->where('warranty_expiry', '<', $today)
+            ->orWhere(fn (Builder $q) => $q->whereNull('warranty_expiry')->where('warranty_type', 'out_of_warranty')));
     }
 }

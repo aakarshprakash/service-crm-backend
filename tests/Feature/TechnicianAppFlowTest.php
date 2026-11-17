@@ -127,11 +127,10 @@ class TechnicianAppFlowTest extends TestCase
         $this->patchJson("/api/v1/jobs/{$job->id}/details", ['warranty_type' => 'in_warranty', 'purchase_date' => '2026-02-01'])->assertOk();
         $this->patchJson("/api/v1/jobs/{$job->id}/details", ['warranty_type' => 'out_of_warranty', 'purchase_date' => null])->assertOk();
 
-        // The office's forms follow the same rule.
+        // The office's forms don't ask for it: the date is often unknown when the call is logged.
         $this->forgetGuards()->actingAsUser($this->ctx['admin']);
-        $this->patchJson("/api/v1/customers/{$product->customer_id}/products/{$product->id}", ['warranty_type' => 'in_warranty'])->assertStatus(422)->assertJsonValidationErrors('purchase_date');
-        $this->postJson('/api/v1/customers', ['name' => 'Ravi', 'phone' => '9811100777', 'products' => [['warranty_type' => 'in_warranty']]])
-            ->assertStatus(422)->assertJsonValidationErrors('products.0.purchase_date');
+        $this->patchJson("/api/v1/customers/{$product->customer_id}/products/{$product->id}", ['warranty_type' => 'in_warranty', 'purchase_date' => null])->assertOk();
+        $this->postJson('/api/v1/customers', ['name' => 'Ravi', 'phone' => '9811100777', 'products' => [['warranty_type' => 'in_warranty']]])->assertCreated();
     }
 
     public function test_photo_sections_are_set_by_the_company_without_an_app_update(): void

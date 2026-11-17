@@ -15,6 +15,7 @@ use App\Models\User;
 use App\Services\AttendanceService;
 use App\Services\LeaveService;
 use App\Services\PayrollService;
+use App\Services\TripService;
 use App\Support\TenantContext;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -166,6 +167,43 @@ class HrController extends Controller
             'outside_fence' => $rows->filter(fn ($r) => $r['day']['outside'])->count(),
             'late' => $rows->filter(fn ($r) => $r['day']['late_minutes'] > 0)->count(),
         ]);
+    }
+
+    /**
+     * Technicians' days on the road for a period: where they went, how far and for how long,
+     * rebuilt from punches and visits. One row per technician per day, with totals per technician.
+     */
+    public function trips(Request $request, TripService $trips): JsonResponse
+    {
+        $data = $request->validate([
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from'],
+            'user_id' => ['nullable', 'integer'],
+            'branch_id' => ['nullable', 'integer'],
+        ]);
+        $tenant = $this->tenant();
+        $today = CarbonImmutable::now($tenant->timezone)->toDateString();
+        $from = $data['from'] ?? $today;
+        $to = $data['to'] ?? $from;
+        if (CarbonImmutable::parse($from)->diffInDays(CarbonImmutable::parse($to)) > 92) {
+            throw ValidationException::withMessages(['to' => 'Choose a period of up to three months.']);
+        }
+        $technicians = User::inTenant()->technicians()->where('status', '!=', 'invited')
+            ->when($request->filled('user_id'), fn ($q) => $q->where('id', $request->integer('user_id')))
+            ->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')))
+            ->orderBy('name')->get(['id', 'name']);
+
+        return $this->ok($trips->summary($tenant, $technicians, $from, $to), '', 200, ['from' => $from, 'to' => $to]);
+    }
+
+    /** One technician's day, stop by stop. */
+    public function tripDay(Request $request, TripService $trips, int $userId): JsonResponse
+    {
+        $data = $request->validate(['date' => ['nullable', 'date_format:Y-m-d']]);
+        $tenant = $this->tenant();
+        $technician = User::inTenant()->technicians()->findOrFail($userId);
+
+        return $this->ok($trips->day($tenant, $technician, $data['date'] ?? CarbonImmutable::now($tenant->timezone)->toDateString()));
     }
 
     /** Monthly register: staff × days with status codes and totals. */

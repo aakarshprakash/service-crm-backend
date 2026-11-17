@@ -21,6 +21,7 @@ use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class JobController extends Controller
 {
@@ -65,7 +66,7 @@ class JobController extends Controller
     {
         $tz = app(TenantContext::class)->tenant()->timezone;
 
-        return $this->ok(collect(['unassigned', 'overdue', 'today', 'high', 'aged', 'no_location'])->mapWithKeys(
+        return $this->ok(collect(['unassigned', 'overdue', 'today', 'high', 'aged', 'no_location', 'feedback_pending'])->mapWithKeys(
             fn ($name) => [$name => $this->filtered($request, ignoreStatus: true, ignoreQuick: true)->quick($name, $tz)->count()]
         ));
     }
@@ -168,7 +169,7 @@ class JobController extends Controller
         $job = ServiceJob::with([
             'customer', 'branch:id,name', 'serviceLocation:id,name', 'complaintType:id,name', 'complaintSummary:id,name',
             'customerProduct.product.brand:id,name', 'customerProduct.product.category:id,name', 'customerProduct.dealer:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name',
-            'technician:id,name,phone', 'creator:id,name', 'cancelRequester:id,name',
+            'technician:id,name,phone', 'creator:id,name', 'cancelRequester:id,name', 'feedbackTaker:id,name',
             'visits.technician:id,name', 'visits.actionTaken:id,name', 'visits.assistedStaff:id,name',
             'visits.inventoryUsage.item:id,code,name,type,unit_of_measure',
             'images', 'voiceNotes.uploader:id,name', 'statusHistory.user:id,name',
@@ -313,6 +314,80 @@ class JobController extends Controller
         return $this->ok($job, 'Part received. The job is ready for a visit.');
     }
 
+    /**
+     * The customer's feedback on a completed job. The technician enters the Customer Satisfaction Code;
+     * The technician enters the satisfaction code on site during visit completion; the office then
+     * contacts the customer, records their feedback here and marks it as collected.
+     * Only then the job hides from the technician's app.
+     */
+    public function feedback(Request $request, int $id): JsonResponse
+    {
+        $job = ServiceJob::findOrFail($id);
+        $user = $request->user();
+        $this->authorizeView($user, $job);
+        abort_unless($user->can('jobs.manage'), 403);
+        $data = $request->validate([
+            'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],
+            'note' => ['nullable', 'string', 'max:500'],
+        ]);
+        if ($job->status !== JobStatus::Completed) {
+            throw ValidationException::withMessages(['customer_satisfaction_code' => 'Feedback is taken once the job is completed.']);
+        }
+
+        $code = trim((string) ($data['customer_satisfaction_code'] ?? ''));
+        if ($code !== '') {
+            $job->customer_satisfaction_code = $code;
+        }
+        $job->feedback_taken_at ??= now();
+        $job->feedback_taken_by ??= $user->id;
+        $job->feedback_note = trim((string) ($data['note'] ?? '')) ?: $job->feedback_note;
+        $job->save();
+        $this->jobs->addNote($job, 'Customer feedback collected'.($code !== '' ? " · code {$code}" : '').(! empty($data['note']) ? " – {$data['note']}" : '').'.', $user);
+
+        return $this->ok($job->load('feedbackTaker:id,name'), 'Feedback saved.');
+    }
+
+    /** The job's photos in one ZIP file, in a folder per photo section. Signatures are left out. */
+    public function photosZip(Request $request, int $id): BinaryFileResponse
+    {
+        $job = ServiceJob::with(['images' => fn ($q) => $q->where('type', '!=', 'signature')->orderBy('id')])->findOrFail($id);
+        $this->authorizeView($request->user(), $job);
+        abort_if($job->images->isEmpty(), 404, 'This job has no photos yet.');
+        abort_unless(class_exists(\ZipArchive::class), 501, 'ZIP downloads are not available on this server.');
+
+        $tenant = app(TenantContext::class)->tenant();
+        $labels = array_column($tenant->photoTypes(), 'label', 'key') + $tenant->setting('photo_labels', []);
+        $disk = Storage::disk('private');
+        $dir = storage_path('app/tmp');
+        if (! is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        $path = $dir.'/photos-'.$job->id.'-'.bin2hex(random_bytes(6)).'.zip';
+        $zip = new \ZipArchive;
+        abort_unless($zip->open($path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) === true, 500, 'The ZIP file could not be created.');
+        $counter = [];
+        foreach ($job->images as $image) {
+            if (! $disk->exists($image->file_path)) {
+                continue;
+            }
+            $folder = preg_replace('/[^A-Za-z0-9 _-]+/', '', (string) ($labels[$image->type] ?? $image->type)) ?: 'Photos';
+            $n = $counter[$folder] = ($counter[$folder] ?? 0) + 1;
+            $ext = strtolower(pathinfo($image->file_path, PATHINFO_EXTENSION)) ?: 'jpg';
+            $zip->addFromString(sprintf('%s/%s-%02d.%s', $folder, $folder, $n, $ext), $disk->get($image->file_path));
+            // Photos are already compressed: storing them as they are keeps the download quick.
+            $zip->setCompressionName(sprintf('%s/%s-%02d.%s', $folder, $folder, $n, $ext), \ZipArchive::CM_STORE);
+        }
+        $added = $zip->numFiles;
+        $zip->close();
+        if (! $added) {
+            @unlink($path);
+            abort(404, 'The photo files are no longer on the server.');
+        }
+        $name = 'Photos-'.preg_replace('/[^A-Za-z0-9_-]+/', '-', $job->crm_call_id).'.zip';
+
+        return response()->download($path, $name, ['Content-Type' => 'application/zip'])->deleteFileAfterSend(true);
+    }
+
     /** FR-5.6 reminder / 2nd service call. */
     /** Adds an update to the job's timeline: its technician, or anyone in the office who manages jobs. */
     public function addNote(Request $request, int $id): JsonResponse
@@ -358,6 +433,9 @@ class JobController extends Controller
             ->when($request->filled('priority'), fn ($q) => $q->where('priority', $request->string('priority')))
             ->when($request->filled('complaint_type_id'), fn ($q) => $q->where('complaint_type_id', $request->integer('complaint_type_id')))
             ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
+            // "under": the unit is covered today. "out": its cover has ended or it is marked out of warranty.
+            ->when($request->input('warranty') === 'under', fn ($q) => $q->whereHas('customerProduct', fn ($p) => $p->underWarranty(now($tz)->toDateString())))
+            ->when($request->input('warranty') === 'out', fn ($q) => $q->whereHas('customerProduct', fn ($p) => $p->outOfWarranty(now($tz)->toDateString())))
             ->when($request->filled('from'), fn ($q) => $q->where('created_at', '>=', $request->date('from', null, $tz)->startOfDay()->utc()))
             ->when($request->filled('to'), fn ($q) => $q->where('created_at', '<=', $request->date('to', null, $tz)->endOfDay()->utc()))
             ->when($request->boolean('today'), fn ($q) => $q->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()]))

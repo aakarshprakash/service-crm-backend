@@ -168,7 +168,10 @@ class CustomerController extends Controller
         ];
     }
 
-    /** A unit in warranty is only covered from its purchase date, so the date is needed to check it. */
+    /**
+     * The technician app asks for the purchase date of a unit in warranty (VisitController::callRules).
+     * The office forms do not: the date is often not known when the call is logged.
+     */
     public const PRODUCT_MESSAGES = [
         'purchase_date.required_if' => 'Enter the purchase date: the unit is marked in warranty.',
         'products.*.purchase_date.required_if' => 'Enter the purchase date: the unit is marked in warranty.',
@@ -185,7 +188,7 @@ class CustomerController extends Controller
             $prefix.'category_id' => ['nullable', 'integer', Rule::exists('product_categories', 'id')->where('tenant_id', $tenantId)],
             $prefix.'serial_no' => ['nullable', 'string', 'max:100'],
             $prefix.'outdoor_serial_no' => ['nullable', 'string', 'max:100'],
-            $prefix.'purchase_date' => ['nullable', 'date', 'before_or_equal:today', 'required_if:'.$prefix.'warranty_type,in_warranty'],
+            $prefix.'purchase_date' => ['nullable', 'date', 'before_or_equal:today'],
             $prefix.'warranty_type' => ['nullable', Rule::in(['in_warranty', 'extended', 'amc', 'out_of_warranty'])],
             $prefix.'warranty_expiry' => ['nullable', 'date'],
             $prefix.'dealer_id' => ['nullable', 'integer', Rule::exists('dealers', 'id')->where('tenant_id', $tenantId)],

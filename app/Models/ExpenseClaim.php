@@ -39,7 +39,7 @@ class ExpenseClaim extends Model
     public function getReceiptUrlAttribute(): ?string
     {
         return $this->id && $this->receipt_path
-            ? URL::temporarySignedRoute('files.receipt', now()->addMinutes(30), ['claim' => $this->id])
+            ? \App\Support\SignedUrl::stable('files.receipt', ['claim' => $this->id], 30)
             : null;
     }
 

@@ -89,7 +89,12 @@ class MasterDataController extends Controller
                 'walkin_bills' => $tenant->setting('gst.walkin_bills'),
                 'job_bills' => $tenant->setting('gst.job_bills'),
             ],
-            'job_age' => [                'warning' => (int) $tenant->setting('jobs.age_warning'),
+            // Whether permanent delete of test entries is switched on right now (Settings → Preferences).
+            'hard_delete' => app(\App\Services\HardDeleteService::class)->enabled($tenant),
+            // What the technician app shows: changed in Settings, no app update needed.
+            'tech_app' => ['show_leave' => (bool) $tenant->setting('tech_app.show_leave')],
+            'job_age' => [
+                'warning' => (int) $tenant->setting('jobs.age_warning'),
                 'old' => (int) $tenant->setting('jobs.age_old'),
                 'critical' => (int) $tenant->setting('jobs.age_critical'),
             ],

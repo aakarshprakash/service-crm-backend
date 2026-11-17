@@ -5,7 +5,7 @@ namespace App\Models;
 use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\URL;
+use App\Support\SignedUrl;
 
 class JobImage extends Model
 {
@@ -17,10 +17,10 @@ class JobImage extends Model
 
     protected $appends = ['url'];
 
-    /** Short-lived signed URL; images live on a private disk, never a public bucket. */
+    /** Short-lived signed URL; images live on a private disk, never a public bucket. Stable for a while, so devices cache the photo. */
     public function getUrlAttribute(): ?string
     {
-        return $this->id ? URL::temporarySignedRoute('files.image', now()->addMinutes(30), ['image' => $this->id]) : null;
+        return $this->id ? SignedUrl::stable('files.image', ['image' => $this->id], 30) : null;
     }
 
     public function job(): BelongsTo
