@@ -12,6 +12,8 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CashCloseController;
 use App\Http\Controllers\Api\V1\CustomerController;
 use App\Http\Controllers\Api\V1\DashboardController;
+use App\Http\Controllers\Api\V1\EstimateController;
+use App\Http\Controllers\Api\V1\HardDeleteController;
 use App\Http\Controllers\Api\V1\InventoryController;
 use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\JobController;
@@ -45,6 +47,8 @@ Route::prefix('v1')->group(function () {
         Route::get('pay/{token}/pdf', [PublicPaymentController::class, 'pdf']);
         Route::post('pay/{token}/order', [PublicPaymentController::class, 'createOrder']);
         Route::post('pay/{token}/confirm', [PublicPaymentController::class, 'confirm']);
+        // The estimate PDF behind the link shared with the customer.
+        Route::get('estimate/{token}/pdf', [EstimateController::class, 'publicPdf'])->where('token', '[A-Za-z0-9]{40,64}')->name('estimates.public-pdf');
         // Customer shares their location for a job (link sent by SMS / WhatsApp).
         Route::get('share-location/{token}', [JobLocationController::class, 'publicShow']);
         Route::post('share-location/{token}', [JobLocationController::class, 'publicStore'])->middleware('throttle:10,1');
@@ -168,6 +172,8 @@ Route::prefix('v1')->group(function () {
             Route::get('jobs/calendar', [JobController::class, 'calendar']);
             Route::get('jobs/{id}', [JobController::class, 'show'])->whereNumber('id');
             Route::get('jobs/{id}/job-card', [JobController::class, 'jobCard'])->whereNumber('id');
+            Route::get('jobs/{id}/photos.zip', [JobController::class, 'photosZip'])->whereNumber('id')->middleware('throttle:exports');
+            Route::post('jobs/{id}/feedback', [JobController::class, 'feedback'])->whereNumber('id')->middleware('throttle:30,1');
             Route::post('jobs/{id}/notes', [JobController::class, 'addNote'])->whereNumber('id')->middleware('throttle:30,1');
         });
         Route::middleware('can:jobs.approve_cancel')->group(function () {
@@ -213,6 +219,21 @@ Route::prefix('v1')->group(function () {
             Route::delete('visits/{id}/spares/{usageId}', [VisitController::class, 'removeSpare'])->whereNumber(['id', 'usageId']);
             Route::post('visits/{id}/complete', [VisitController::class, 'complete'])->whereNumber('id');
             Route::post('invoices/{id}/collect', [InvoiceController::class, 'collect'])->whereNumber('id');
+        });
+
+        // Estimates (quotations) made by the office.
+        Route::middleware('can:estimates.view')->group(function () {
+            Route::get('estimates', [EstimateController::class, 'index']);
+            Route::get('estimates/summary', [EstimateController::class, 'summary']);
+            Route::get('estimates/{id}', [EstimateController::class, 'show'])->whereNumber('id');
+            Route::get('estimates/{id}/pdf', [EstimateController::class, 'pdf'])->whereNumber('id');
+        });
+        Route::middleware('can:estimates.manage')->group(function () {
+            Route::post('estimates', [EstimateController::class, 'store']);
+            Route::patch('estimates/{id}', [EstimateController::class, 'update'])->whereNumber('id');
+            Route::post('estimates/{id}/status', [EstimateController::class, 'setStatus'])->whereNumber('id');
+            Route::post('estimates/{id}/duplicate', [EstimateController::class, 'duplicate'])->whereNumber('id');
+            Route::delete('estimates/{id}', [EstimateController::class, 'destroy'])->whereNumber('id');
         });
 
         // Walk-in (counter) bills, expenses and the mini accounts books.
@@ -269,6 +290,8 @@ Route::prefix('v1')->group(function () {
             Route::middleware('can:hr.view')->group(function () {
                 Route::get('attendance/daily', [HrController::class, 'daily']);
                 Route::get('attendance/register', [HrController::class, 'register']);
+                Route::get('trips', [HrController::class, 'trips']);
+                Route::get('trips/{userId}', [HrController::class, 'tripDay'])->whereNumber('userId');
             });
             Route::post('attendance/adjust', [HrController::class, 'adjust'])->middleware('can:hr.manage');
             Route::middleware('can:leave.approve')->group(function () {
@@ -383,6 +406,13 @@ Route::prefix('v1')->group(function () {
             Route::post('logo', [SettingsController::class, 'uploadLogo']);
             Route::get('templates', [SettingsController::class, 'templates']);
             Route::put('templates', [SettingsController::class, 'saveTemplate']);
+        });
+        // Permanent delete of test entries: switched on with the admin's password, off again by itself after a day.
+        Route::middleware('can:records.hard_delete')->prefix('hard-delete')->group(function () {
+            Route::get('/', [HardDeleteController::class, 'status']);
+            Route::put('/', [HardDeleteController::class, 'toggle'])->middleware('throttle:login');
+            Route::get('{type}/{id}', [HardDeleteController::class, 'preview'])->whereIn('type', ['job', 'customer', 'invoice', 'payment', 'expense', 'income'])->whereNumber('id');
+            Route::delete('{type}/{id}', [HardDeleteController::class, 'destroy'])->whereIn('type', ['job', 'customer', 'invoice', 'payment', 'expense', 'income'])->whereNumber('id')->middleware('throttle:30,1');
         });
         Route::get('settings/logo', [SettingsController::class, 'logo'])->middleware('can:dashboard.view');
         Route::get('audit-logs', [SettingsController::class, 'auditLogs'])->middleware('can:audit.view');

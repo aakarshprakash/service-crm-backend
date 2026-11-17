@@ -48,7 +48,7 @@ class BooksController extends Controller
         $lastStart = $now->startOfMonth()->subMonth();
         $last = $this->books->summary($lastStart->toDateString(), $lastStart->endOfMonth()->toDateString(), $tenant->timezone);
         $receivables = $ledger->receivables();
-        $withTechnicians = User::inTenant()->technicians()->where('status', 'active')->get()->sum(fn (User $t) => $cash->cashInHand($t));
+        $withTechnicians = array_sum($cash->cashInHandFor(User::inTenant()->technicians()->where('status', 'active')->pluck('id')));
         // Newest 8 entries of the last 30 days (the whole window is read, so a busy month can't push them out).
         $recent = array_slice(array_reverse($this->books->dayBook($now->subDays(30)->toDateString(), $now->toDateString(), $tenant->timezone)), 0, 8);
 
@@ -84,7 +84,14 @@ class BooksController extends Controller
         [$from, $to] = $this->period($request);
         abort_if(CarbonImmutable::parse($from)->diffInDays(CarbonImmutable::parse($to)) > 31, 422, 'Choose up to 31 days for the register.');
 
-        return $this->ok($ledger->register(app(TenantContext::class)->tenant(), $from, $to));
+        $tenant = app(TenantContext::class)->tenant();
+        $register = $ledger->register($tenant, $from, $to);
+        // Asked for a period that reaches today: also say where the cash is at this moment.
+        if ($to >= now($tenant->timezone)->toDateString()) {
+            $register['cash_now'] = app(\App\Services\OfficeDayCloseService::class)->position();
+        }
+
+        return $this->ok($register);
     }
 
     public function receivables(Request $request, LedgerService $ledger): JsonResponse

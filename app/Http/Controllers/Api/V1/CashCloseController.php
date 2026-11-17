@@ -113,12 +113,19 @@ class CashCloseController extends Controller
     /** Cash in hand for every technician (accounts overview). */
     public function overview(): JsonResponse
     {
-        $rows = User::inTenant()->technicians()->where('status', '!=', 'invited')->with('branch:id,name')->orderBy('name')->get()
-            ->map(fn (User $t) => [
-                'technician' => ['id' => $t->id, 'name' => $t->name, 'branch' => $t->branch?->name],
-                'cash_in_hand' => $this->cash->cashInHand($t),
-                'last_close' => CashClose::where('technician_id', $t->id)->orderByDesc('close_date')->first(['id', 'close_date', 'status']),
-            ]);
+        $technicians = User::inTenant()->technicians()->where('status', '!=', 'invited')->with('branch:id,name')->orderBy('name')->get();
+        // Everyone's cash and latest close in a few queries, not several per technician.
+        $holding = $this->cash->cashInHandFor($technicians->pluck('id'));
+        $ids = $technicians->pluck('id');
+        $newest = CashClose::query()->toBase()->whereIn('technician_id', $ids)->groupBy('technician_id')->selectRaw('technician_id, MAX(close_date) as close_date');
+        $lastClose = CashClose::query()
+            ->joinSub($newest, 'newest', fn ($j) => $j->on('newest.technician_id', '=', 'cash_closes.technician_id')->on('newest.close_date', '=', 'cash_closes.close_date'))
+            ->get(['cash_closes.id', 'cash_closes.technician_id', 'cash_closes.close_date', 'cash_closes.status'])->keyBy('technician_id');
+        $rows = $technicians->map(fn (User $t) => [
+            'technician' => ['id' => $t->id, 'name' => $t->name, 'branch' => $t->branch?->name],
+            'cash_in_hand' => $holding[$t->id] ?? 0,
+            'last_close' => $lastClose[$t->id] ?? null,
+        ]);
         $pendingVerification = CashClose::where('status', 'submitted')->count();
 
         return $this->ok(['technicians' => $rows, 'pending_verification' => $pendingVerification]);

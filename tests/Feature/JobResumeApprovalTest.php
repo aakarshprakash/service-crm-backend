@@ -118,7 +118,8 @@ class JobResumeApprovalTest extends TestCase
     {
         $customer = $this->makeCustomer($this->tenant);
         $recent = $this->makeJob($this->tenant, $customer, $this->tech, ['status' => 'completed', 'completed_at' => now()->subDay()]);
-        $old = $this->makeJob($this->tenant, $customer, $this->tech, ['status' => 'completed', 'completed_at' => now()->subDays(3)]);
+        $old = $this->makeJob($this->tenant, $customer, $this->tech, ['status' => 'completed', 'completed_at' => now()->subDays(3), 'customer_satisfaction_code' => 'OK1']);
+        $this->inTenant($this->tenant, fn () => $old->forceFill(['feedback_taken_at' => now()->subDays(3)])->save());
         $cancelled = $this->makeJob($this->tenant, $customer, $this->tech, ['status' => 'cancelled', 'cancelled_at' => now()->subDays(5)]);
         $open = $this->makeJob($this->tenant, $customer, $this->tech);
 
@@ -231,5 +232,43 @@ class JobResumeApprovalTest extends TestCase
 
         $this->getJson('/api/v1/books/register?from=2026-01-01&to=2026-03-01')->assertStatus(422);
         $this->forgetGuards()->actingAsUser($this->tech)->getJson("/api/v1/books/register?from={$today}&to={$today}")->assertForbidden();
+    }
+
+    public function test_the_register_says_where_the_cash_is_and_shows_hand_overs(): void
+    {
+        $job = $this->makeJob($this->tenant, $this->makeCustomer($this->tenant), $this->tech);
+        $this->actingAsUser($this->tech);
+        $visit = $this->postJson("/api/v1/jobs/{$job->id}/visits/start", ['service_type' => 'office'])->json('data.id');
+        $action = $this->inTenant($this->tenant, fn () => \App\Models\ActionTakenOption::first());
+        $this->postJson("/api/v1/visits/{$visit}/complete", ['status' => 'completed', 'action_taken_id' => $action->id, 'service_summary' => 'Done', 'labour_charge' => 90000, 'payment_method' => 'cash', 'amount_collected' => 90000])->assertOk();
+        $today = CarbonImmutable::now($this->tenant->timezone)->toDateString();
+
+        // Collected, not handed over: all of it is with the technician, and the office drawer was never counted.
+        $this->forgetGuards()->actingAsUser($this->ctx['admin']);
+        $now = $this->getJson("/api/v1/books/register?from={$today}&to={$today}")->assertOk()->json('data.cash_now');
+        $this->assertSame(90000, $now['with_technicians']);
+        $this->assertSame([['id' => $this->tech->id, 'name' => $this->tech->name, 'amount' => 90000]], $now['technicians']);
+        $this->assertNull($now['office']);
+        $this->assertTrue($now['needs_opening']);
+
+        // The technician closes the day and hands over 60,000: it shows on the day and leaves them holding 30,000.
+        $close = $this->forgetGuards()->actingAsUser($this->tech)->postJson('/api/v1/accounts/cash-close', ['date' => $today, 'amount_confirmed' => 90000])->assertCreated()->json('data.id');
+        $this->forgetGuards()->actingAsUser($this->ctx['admin']);
+        $this->patchJson("/api/v1/accounts/cash-close/{$close}/verify", ['amount_verified' => 90000])->assertOk();
+        $this->postJson("/api/v1/accounts/cash-close/{$close}/deposit", ['amount' => 60000, 'deposited_to' => 'office', 'deposit_date' => $today])->assertSuccessful();
+        $data = $this->getJson("/api/v1/books/register?from={$today}&to={$today}")->assertOk()->json('data');
+        $this->assertSame([['technician_id' => $this->tech->id, 'technician' => $this->tech->name, 'amount' => 60000]], $data['days'][0]['handovers']);
+        $this->assertSame(30000, $data['cash_now']['with_technicians']);
+        // A hand-over moves cash from one pocket to another: the day's totals don't change.
+        $this->assertSame(90000, $data['days'][0]['totals']['cash_in']);
+        $this->assertSame(0, $data['days'][0]['totals']['cash_out']);
+
+        // Counting the office cash makes the drawer figure known.
+        $this->postJson('/api/v1/books/day-close', ['date' => $today, 'opening_cash' => 10000, 'counted_cash' => 70000])->assertCreated();
+        $this->getJson("/api/v1/books/register?from={$today}&to={$today}")->assertJsonPath('data.cash_now.office', 70000)->assertJsonPath('data.cash_now.office_counted', true);
+
+        // A past period carries no "now".
+        $past = CarbonImmutable::now($this->tenant->timezone)->subDays(3)->toDateString();
+        $this->assertArrayNotHasKey('cash_now', $this->getJson("/api/v1/books/register?from={$past}&to={$past}")->json('data'));
     }
 }

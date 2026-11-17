@@ -154,7 +154,7 @@ class OfficeDayCloseService
             'date' => $date,
             'closed_through' => $through,
             'close' => $existing ? $this->present($existing, $latest) : null,
-            'with_technicians' => (int) User::inTenant()->technicians()->where('status', '!=', 'invited')->get()->sum(fn (User $t) => $this->cash->cashInHand($t)),
+            'with_technicians' => (int) array_sum($this->cash->cashInHandFor(User::inTenant()->technicians()->where('status', '!=', 'invited')->pluck('id'))),
         ];
         if ($existing || ($through && $date <= $through) || $date > $this->today()) {
             return $base + ['can_close' => false, 'period_from' => null, 'previous' => null, 'needs_opening' => false, 'opening_cash' => null, 'flows' => null, 'expected_cash' => null];
@@ -172,6 +172,33 @@ class OfficeDayCloseService
             'opening_cash' => $opening,
             'flows' => $flows,
             'expected_cash' => $opening === null ? null : self::expected($opening, $flows),
+        ];
+    }
+
+    /**
+     * Where the company's cash is right now: what the office drawer should hold (or was counted at, if today
+     * is closed) and what each technician still has to hand over. Together they are the cash book's balance.
+     *
+     * @return array{date: string, office: ?int, office_counted: bool, counted_on: ?string, needs_opening: bool, technicians: list<array{id: int, name: string, amount: int}>, with_technicians: int}
+     */
+    public function position(): array
+    {
+        $today = $this->today();
+        $preview = $this->preview($today);
+        $staff = User::inTenant()->technicians()->where('status', '!=', 'invited')->orderBy('name')->get(['id', 'name']);
+        $holding = $this->cash->cashInHandFor($staff->pluck('id'));
+        $technicians = $staff->map(fn (User $t) => ['id' => $t->id, 'name' => $t->name, 'amount' => $holding[$t->id] ?? 0])
+            ->filter(fn (array $row) => $row['amount'] !== 0)->values()->all();
+
+        return [
+            'date' => $today,
+            'office' => $preview['close'] ? $preview['close']['counted_cash'] : $preview['expected_cash'],
+            'office_counted' => (bool) $preview['close'],
+            // The last day the drawer was actually counted: the figure above is worked forward from it.
+            'counted_on' => $preview['close'] ? $today : ($preview['previous']['date'] ?? null),
+            'needs_opening' => (bool) $preview['needs_opening'],
+            'technicians' => $technicians,
+            'with_technicians' => array_sum(array_column($technicians, 'amount')),
         ];
     }
 

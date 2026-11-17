@@ -30,7 +30,7 @@ class ServiceJob extends Model
         'created_by', 'parent_job_id', 'completed_at', 'cancelled_at', 'cancel_reason',
     ];
 
-    protected $appends = ['call_age_days', 'needs_resume_approval'];
+    protected $appends = ['call_age_days', 'needs_resume_approval', 'feedback_pending'];
 
     /** The customer's share-location link is handed out by the office, never in job payloads. */
     protected $hidden = ['location_token'];
@@ -46,7 +46,24 @@ class ServiceJob extends Model
             'resume_approved_at' => 'datetime',
             'completed_at' => 'datetime',
             'cancelled_at' => 'datetime',
+            'feedback_taken_at' => 'datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        // The satisfaction code is collected by the technician on site, but feedback is "taken" only
+        // when the office reviews it and explicitly marks it as collected from the web.
+    }
+
+    /** Completed, and the customer's feedback (satisfaction code, portal rating or the office's tick) is still to come. */
+    public function getFeedbackPendingAttribute(): bool
+    {
+        if (! array_key_exists('status', $this->attributes) || ! array_key_exists('feedback_taken_at', $this->attributes)) {
+            return false;
+        }
+
+        return $this->status === JobStatus::Completed && $this->feedback_taken_at === null;
     }
 
     /**
@@ -134,25 +151,36 @@ class ServiceJob extends Model
             'high' => $query->where('priority', 'high')->whereIn('status', $unfinished),
             'aged' => $query->whereIn('status', $unfinished)->where('created_at', '<', self::agedBefore($tz)),
             'no_location' => $query->whereNull('service_location_id')->whereIn('status', $unfinished),
+            'feedback_pending' => $query->feedbackPending(),
             default => $query,
         };
     }
 
     /**
      * For the technician's app: completed and cancelled jobs drop out after the days set in Settings → Technician app.
+     * A completed job first waits for the customer's feedback (Settings → Technician app), however long that takes.
      * They stay on record (reports, the office, the customer's history); 0 days keeps them in the app.
      */
     public function scopeClosedRecently(Builder $query): Builder
     {
-        $days = (int) (app(TenantContext::class)->tenant()?->setting('jobs.tech_hide_closed_after_days') ?? 2);
+        $tenant = app(TenantContext::class)->tenant();
+        $days = (int) ($tenant?->setting('jobs.tech_hide_closed_after_days') ?? 2);
         if ($days <= 0) {
             return $query;
         }
         $since = now()->subDays($days);
+        $waitForFeedback = (bool) ($tenant?->setting('jobs.tech_keep_until_feedback') ?? true);
 
         return $query->where(fn (Builder $q) => $q->whereNotIn('status', [JobStatus::Completed->value, JobStatus::Cancelled->value])
             ->orWhere('completed_at', '>=', $since)
-            ->orWhere('cancelled_at', '>=', $since));
+            ->orWhere('cancelled_at', '>=', $since)
+            ->when($waitForFeedback, fn (Builder $q) => $q->orWhere(fn (Builder $q) => $q->where('status', JobStatus::Completed->value)->whereNull('feedback_taken_at'))));
+    }
+
+    /** Completed jobs whose customer feedback has not been taken yet. */
+    public function scopeFeedbackPending(Builder $query): Builder
+    {
+        return $query->where('status', JobStatus::Completed->value)->whereNull('feedback_taken_at');
     }
 
     public function scopeSearch(Builder $query, ?string $term): Builder
@@ -209,6 +237,11 @@ class ServiceJob extends Model
     public function technician(): BelongsTo
     {
         return $this->belongsTo(User::class, 'assigned_technician_id');
+    }
+
+    public function feedbackTaker(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'feedback_taken_by');
     }
 
     public function cancelRequester(): BelongsTo
