@@ -274,6 +274,7 @@ Route::prefix('v1')->group(function () {
 
         // HR (v2.1): self service for every staff member…
         Route::middleware('can:self.service')->prefix('my')->group(function () {
+            Route::get('punch', [HrController::class, 'myPunch']);
             Route::get('attendance', [HrController::class, 'myAttendance']);
             Route::get('leaves', [HrController::class, 'myLeaves']);
             Route::post('leaves', [HrController::class, 'applyLeave']);

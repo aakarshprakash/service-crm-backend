@@ -107,6 +107,29 @@ class AttendanceService
         return Shift::where('is_default', true)->where('is_active', true)->first();
     }
 
+    /**
+     * What an app tells someone about punching: whether the branch geofence applies to them
+     * (off / flag / enforce), the office location and radius, whether technicians must be
+     * punched in to start a visit, and their shift.
+     */
+    public function rules(User $user): array
+    {
+        $tenant = Tenant::findOrFail($user->tenant_id);
+        $mode = $tenant->setting('attendance.geofence', 'off');
+        $applies = $mode !== 'off' && ($user->role !== Role::Technician || $tenant->setting('attendance.geofence_technicians', false));
+        $branch = $user->branch_id ? Branch::find($user->branch_id) : null;
+        $shift = $this->shiftFor(EmployeeProfile::with('shift')->where('user_id', $user->id)->first());
+
+        return [
+            'geofence' => $applies && $branch?->hasGeofence() ? $mode : 'off',
+            'branch' => $branch ? ['name' => $branch->name, 'lat' => $branch->lat, 'lng' => $branch->lng, 'radius' => $branch->geofence_radius] : null,
+            'require_location' => (bool) $tenant->setting('attendance.require_location', false),
+            'require_punch_in' => (bool) $tenant->setting('jobs.require_punch_in', true),
+            'auto_punch_out_at' => $tenant->setting('attendance.auto_punch_out_at'),
+            'shift' => $shift ? ['name' => $shift->name, 'start' => $shift->start_time, 'end' => $shift->end_time, 'grace_minutes' => $shift->grace_minutes] : null,
+        ];
+    }
+
     private function human(int $metres): string
     {
         return $metres >= 1000 ? round($metres / 1000, 1).' km' : $metres.' m';
