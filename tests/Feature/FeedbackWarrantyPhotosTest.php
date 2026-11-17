@@ -11,6 +11,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -91,6 +92,40 @@ class FeedbackWarrantyPhotosTest extends TestCase
         $this->inTenant($this->tenant, fn () => Review::create(['job_id' => $b->id, 'customer_id' => $customer->id, 'technician_id' => $this->tech->id, 'rating' => 5]));
         $this->assertNotNull($b->fresh()->feedback_taken_at);
         $this->assertSame([$open->id], $this->techJobIds());
+    }
+
+    public function test_the_pending_filter_lists_every_completed_job_nobody_has_recorded_feedback_for(): void
+    {
+        $customer = $this->makeCustomer($this->tenant);
+        $done = fn (array $extra = []) => $this->makeJob($this->tenant, $customer, $this->tech, ['status' => 'completed', 'completed_at' => now()->subDays(20)] + $extra);
+
+        // Completed before feedback was tracked: the migration stamps it as taken so it leaves the technician's app, but nobody recorded anything.
+        $old = $done();
+        DB::table('service_jobs')->where('id', $old->id)->update(['feedback_taken_at' => now()->subDays(10)]);
+        // A code the technician typed on site is not collected feedback.
+        $codeOnly = $done(['customer_satisfaction_code' => 'HAPPY1']);
+        $marked = $done();
+        $rated = $done();
+        $open = $this->makeJob($this->tenant, $customer, $this->tech);
+
+        $this->actingAsUser($this->admin);
+        $this->postJson("/api/v1/jobs/{$marked->id}/feedback", ['note' => 'Called the customer, happy'])->assertOk();
+        $this->inTenant($this->tenant, fn () => Review::create(['job_id' => $rated->id, 'customer_id' => $customer->id, 'technician_id' => $this->tech->id, 'rating' => 4]));
+
+        $pending = collect($this->getJson('/api/v1/jobs?quick=feedback_pending')->assertOk()->json('data'))->pluck('id')->sort()->values()->all();
+        $this->assertSame(collect([$old->id, $codeOnly->id])->sort()->values()->all(), $pending);
+        $this->assertNotContains($open->id, $pending);
+        $this->getJson('/api/v1/jobs/quick-counts')->assertJsonPath('data.feedback_pending', 2);
+
+        // The list carries who marked it and the portal rating, so its badge agrees with the filter.
+        $rows = collect($this->getJson('/api/v1/jobs')->json('data'))->keyBy('id');
+        $this->assertSame($this->admin->id, $rows[$marked->id]['feedback_taken_by']);
+        $this->assertNotNull($rows[$rated->id]['review']);
+        $this->assertNull($rows[$old->id]['feedback_taken_by']);
+
+        // Marking an old job collected takes it off the filter.
+        $this->postJson("/api/v1/jobs/{$old->id}/feedback", [])->assertOk();
+        $this->getJson('/api/v1/jobs/quick-counts')->assertJsonPath('data.feedback_pending', 1);
     }
 
     public function test_the_wait_for_feedback_can_be_switched_off(): void
