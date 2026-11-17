@@ -35,6 +35,7 @@ class JobController extends Controller
                 'customer:id,name,phone,address,city,pincode,lat,lng', 'technician:id,name', 'branch:id,name', 'serviceLocation:id,name',
                 'complaintType:id,name', 'customerProduct:id,product_id,model_no,brand_id,category_id,serial_no,purchase_date,warranty_type,warranty_expiry', 'customerProduct.product:id,model_name,brand_id',
                 'customerProduct.product.brand:id,name', 'customerProduct.brand:id,name', 'customerProduct.category:id,name',
+                'review', // a portal rating counts as the customer's feedback in the list's badge
             ]);
 
         $sort = $request->string('sort')->toString();

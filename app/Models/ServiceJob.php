@@ -177,10 +177,17 @@ class ServiceJob extends Model
             ->when($waitForFeedback, fn (Builder $q) => $q->orWhere(fn (Builder $q) => $q->where('status', JobStatus::Completed->value)->whereNull('feedback_taken_at'))));
     }
 
-    /** Completed jobs whose customer feedback has not been taken yet. */
+    /**
+     * The office's "Feedback pending" filter: completed jobs where nobody has recorded the customer's feedback.
+     * Collected means a staff member marked it (feedback_taken_by) or the customer rated the job on the portal.
+     * Jobs completed before feedback was tracked carry a feedback_taken_at (so they stay out of the technician's app)
+     * but no one recorded anything, so they count as pending here. The technician app's own wait is by feedback_taken_at.
+     */
     public function scopeFeedbackPending(Builder $query): Builder
     {
-        return $query->where('status', JobStatus::Completed->value)->whereNull('feedback_taken_at');
+        return $query->where('status', JobStatus::Completed->value)
+            ->whereNull('feedback_taken_by')
+            ->whereDoesntHave('review');
     }
 
     public function scopeSearch(Builder $query, ?string $term): Builder
