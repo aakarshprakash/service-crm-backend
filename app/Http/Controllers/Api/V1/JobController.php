@@ -179,14 +179,22 @@ class JobController extends Controller
 
         $this->authorizeView($request->user(), $job);
         $job->customerProduct?->setAttribute('under_warranty', $job->customerProduct->isUnderWarranty());
-        $job->setAttribute('previous_services', $this->previousServices($job));
 
         return $this->ok($job);
     }
 
+    /** Loaded when the technician asks to see them, not with every job they open. */
+    public function previousServicesList(Request $request, int $id): JsonResponse
+    {
+        $job = ServiceJob::findOrFail($id);
+        $this->authorizeView($request->user(), $job);
+
+        return $this->ok($this->previousServices($job));
+    }
+
     /**
      * Earlier finished visits for the same product (or, with no product, the same customer) on other jobs,
-     * so whoever opens the job sees what was done last time.
+     * so whoever opens the job can see what was done last time.
      */
     private function previousServices(ServiceJob $job): array
     {

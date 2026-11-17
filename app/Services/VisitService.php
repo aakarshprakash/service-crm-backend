@@ -78,6 +78,8 @@ class VisitService
                 'location_lng' => $data['lng'] ?? null,
             ]);
 
+            $this->carryOver($job, $visit);
+
             $job->service_type = $data['service_type'];
             // The go-ahead covers this one visit: left pending again, the next one needs another.
             $job->resume_approved_at = null;
@@ -91,6 +93,27 @@ class VisitService
     }
 
     /** Call-tab edits while the visit is open (FR-6.5). */
+    /**
+     * A job left pending (or part pending) keeps what was recorded on it, whoever takes the next visit:
+     * photos, voice notes and the service summary move into the new visit, where the technician can edit
+     * them. Parts, charges and payments stay on the visit that billed them, so nothing is billed twice.
+     */
+    private function carryOver(ServiceJob $job, JobVisit $visit): void
+    {
+        $earlier = JobVisit::where('job_id', $job->id)->where('id', '!=', $visit->id)->orderBy('id')->get(['id', 'service_summary']);
+        if ($earlier->isEmpty()) {
+            return;
+        }
+        $ids = $earlier->modelKeys();
+        // A signature belongs to the visit the customer signed off, so it stays there.
+        JobImage::whereIn('job_visit_id', $ids)->where('type', '!=', 'signature')->update(['job_visit_id' => $visit->id]);
+        JobVoiceNote::whereIn('job_visit_id', $ids)->update(['job_visit_id' => $visit->id]);
+        $summary = $earlier->last(fn (JobVisit $v) => filled($v->service_summary))?->service_summary;
+        if ($summary) {
+            $visit->update(['service_summary' => $summary]);
+        }
+    }
+
     public function updateCallDetails(JobVisit $visit, array $data): JobVisit
     {
         $this->ensureOpen($visit);

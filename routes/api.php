@@ -171,6 +171,7 @@ Route::prefix('v1')->group(function () {
             Route::get('jobs/location-analysis', [JobController::class, 'locationAnalysis']);
             Route::get('jobs/calendar', [JobController::class, 'calendar']);
             Route::get('jobs/{id}', [JobController::class, 'show'])->whereNumber('id');
+            Route::get('jobs/{id}/previous-services', [JobController::class, 'previousServicesList'])->whereNumber('id');
             Route::get('jobs/{id}/job-card', [JobController::class, 'jobCard'])->whereNumber('id');
             Route::get('jobs/{id}/photos.zip', [JobController::class, 'photosZip'])->whereNumber('id')->middleware('throttle:exports');
             Route::post('jobs/{id}/feedback', [JobController::class, 'feedback'])->whereNumber('id')->middleware('throttle:30,1');

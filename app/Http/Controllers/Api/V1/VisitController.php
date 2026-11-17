@@ -35,6 +35,9 @@ class VisitController extends Controller
         ]);
         $visit = $this->visits->start(ServiceJob::findOrFail($jobId), $request->user(), $data);
 
+        // A job resumed after being left pending starts with the earlier photos and voice notes already in it.
+        $visit->load(['images', 'voiceNotes', 'inventoryUsage.item:id,code,name,type,unit_of_measure', 'actionTaken:id,name']);
+
         return $this->created($visit, 'Service started.');
     }
 
