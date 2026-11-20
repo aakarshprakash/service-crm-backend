@@ -27,6 +27,12 @@ use Illuminate\Validation\ValidationException;
 class EstimateService
 {
     /** Printed when the company has not written its own terms (Settings can override per estimate). */
+    /** Room for a full equipment specification, as on a supply quotation. */
+    public const DESCRIPTION_MAX = 2000;
+
+    /** The standard terms when the rates are before GST and GST is added on top. */
+    public const DEFAULT_TERMS_GST_ADDED = "GST is charged extra at the rate shown.\nParts not listed here are charged extra after your approval.\nWork starts once this estimate is approved.";
+
     public const DEFAULT_TERMS = "Prices include all taxes unless stated otherwise.\nParts not listed here are charged extra after your approval.\nWork starts once this estimate is approved.";
 
     /**
@@ -41,9 +47,12 @@ class EstimateService
             $today = now($tenant->timezone)->toDateString();
             $date = $data['estimate_date'] ?? $today;
             $this->assertLinks($data);
+            // How a new estimate starts, from Settings → GST: with or without GST, and whether the rates typed include it.
+            $isGst = $data['is_gst'] ?? ((bool) $tenant->gstin && $tenant->setting('gst.estimates') !== 'non_gst');
+            $inclusive = $data['prices_include_gst'] ?? $tenant->setting('gst.estimate_prices') === 'include_gst';
 
             $estimate = Estimate::create([
-                'estimate_number' => Sequence::formatted($tenant->id, 'estimate', (string) $tenant->setting('estimate_prefix', 'EST')),
+                'estimate_number' => $this->numberFor($tenant, $data['estimate_number'] ?? null),
                 'customer_id' => $data['customer_id'],
                 'customer_product_id' => $data['customer_product_id'] ?? null,
                 'job_id' => $data['job_id'] ?? null,
@@ -53,8 +62,11 @@ class EstimateService
                 'valid_until' => array_key_exists('valid_until', $data) ? $data['valid_until'] : \Illuminate\Support\Carbon::parse($date)->addDays((int) $tenant->setting('estimates.valid_days', 15))->toDateString(),
                 'subject' => $data['subject'] ?? null,
                 'notes' => $data['notes'] ?? null,
-                'terms' => $data['terms'] ?? $tenant->setting('estimates.terms') ?? self::DEFAULT_TERMS,
-                'is_gst' => $data['is_gst'] ?? ((bool) $tenant->gstin && $tenant->setting('gst.job_bills') !== 'non_gst'),
+                'terms' => $data['terms'] ?? $tenant->setting('estimates.terms') ?? ($isGst && ! $inclusive ? self::DEFAULT_TERMS_GST_ADDED : self::DEFAULT_TERMS),
+                'is_gst' => $isGst,
+                'prices_include_gst' => $inclusive,
+                'show_signature' => $data['show_signature'] ?? (bool) $tenant->setting('signature.estimates', true),
+                'customer_gstin' => $data['customer_gstin'] ?? null,
                 'share_token' => Str::random(48),
                 'created_by' => $by->id,
             ]);
@@ -73,8 +85,14 @@ class EstimateService
         return DB::transaction(function () use ($estimate, $data) {
             $tenant = Tenant::findOrFail($estimate->tenant_id);
             $this->assertLinks($data + ['customer_id' => $estimate->customer_id]);
+            // A blank number on an edit keeps the current one.
+            if (blank($data['estimate_number'] ?? null)) {
+                unset($data['estimate_number']);
+            }
             $estimate->fill(array_intersect_key($data, array_flip([
+                'estimate_number',
                 'customer_product_id', 'job_id', 'branch_id', 'estimate_date', 'valid_until', 'subject', 'notes', 'terms', 'is_gst',
+                'prices_include_gst', 'show_signature', 'customer_gstin',
             ])))->save();
             if (isset($data['items'])) {
                 $estimate->items()->delete();
@@ -114,6 +132,17 @@ class EstimateService
         return $estimate;
     }
 
+    /** A private image (logo, signature, stamp) as a data URI DomPDF can embed, or null if there is none. */
+    private static function imageData(?string $path): ?string
+    {
+        if (! $path || ! Storage::disk('private')->exists($path)) {
+            return null;
+        }
+        $mime = str_ends_with(strtolower($path), '.png') ? 'image/png' : 'image/jpeg';
+
+        return 'data:'.$mime.';base64,'.base64_encode(Storage::disk('private')->get($path));
+    }
+
     /** A link the customer can open without signing in: the estimate as a PDF. */
     public function shareUrl(Estimate $estimate): string
     {
@@ -127,19 +156,29 @@ class EstimateService
             'customerProduct.product.brand', 'customerProduct.brand', 'customerProduct.category', 'creator:id,name']);
         $breakup = $estimate->gst_breakup ?? ['lines' => [], 'summary' => []];
         $currency = $tenant->currency ?? 'INR';
-        $logo = $tenant->logo_path && Storage::disk('private')->exists($tenant->logo_path)
-            ? 'data:image/png;base64,'.base64_encode(Storage::disk('private')->get($tenant->logo_path)) : null;
-        $companyState = IndianStates::code($tenant->gstin) ?? IndianStates::code($tenant->state);
-        $customerState = IndianStates::code($estimate->customer?->gstin) ?? IndianStates::code($estimate->customer?->state);
+        $logo = self::imageData($tenant->logo_path);
+        // The signature and stamp print only when this estimate is set to show them.
+        $signature = $estimate->show_signature ? self::imageData($tenant->signature_path) : null;
+        $stamp = $estimate->show_signature ? self::imageData($tenant->stamp_path) : null;
+        $companyState = IndianStates::resolve($tenant->gstin, $tenant->state);
+        $customerState = IndianStates::resolve($estimate->customer_gstin ?: $estimate->customer?->gstin, $estimate->customer?->state);
+        $taxAdded = $estimate->is_gst && ! $estimate->prices_include_gst;
+        $rates = array_values(array_unique(array_column($breakup['lines'], 'gst_rate')));
 
         return Pdf::loadView('pdf.estimate', [
             'estimate' => $estimate,
             'tenant' => $tenant,
             'logo' => $logo,
+            'signature' => $signature,
+            'stamp' => $stamp,
             'lines' => $breakup['lines'],
             'summary' => $estimate->is_gst ? $breakup['summary'] : [],
             'gross' => array_sum(array_column($breakup['lines'], 'gross')),
             'discount' => $estimate->discount_amount,
+            // GST added on top: lines show the price before GST and the tax is one line under the total.
+            'taxAdded' => $taxAdded,
+            'singleRate' => count($rates) === 1 ? $rates[0] : null,
+            'rate' => fn ($r) => rtrim(rtrim(number_format((float) $r, 2), '0'), '.'),
             'interState' => $estimate->igst_amount !== 0,
             'money' => fn (int $v) => Money::format($v, $currency),
             'qty' => fn ($q) => rtrim(rtrim(number_format((float) $q, 3), '0'), '.'),
@@ -147,6 +186,33 @@ class EstimateService
             'companyState' => $companyState ? IndianStates::name($companyState).' ('.$companyState.')' : $tenant->state,
             'customerState' => $customerState ? IndianStates::name($customerState).' ('.$customerState.')' : $estimate->customer?->state,
         ])->setPaper('a4');
+    }
+
+    /**
+     * The number a new estimate gets: the one typed, or the next automatic one. An automatic number
+     * that a typed number already uses is skipped, so typing EST-2611-00005 by hand never blocks saving.
+     */
+    private function numberFor(Tenant $tenant, ?string $typed): string
+    {
+        $typed = trim((string) $typed);
+        if ($typed !== '') {
+            return $typed;
+        }
+        do {
+            $number = Sequence::formatted($tenant->id, 'estimate', (string) $tenant->setting('estimate_prefix', 'EST'));
+        } while (Estimate::where('estimate_number', $number)->exists());
+
+        return $number;
+    }
+
+    /** The rate Settings gives a line: the service rate, or a part's own HSN rate, else the default parts rate. */
+    private static function defaultRate(string $type, ?InventoryItem $item, float $serviceRate, float $partRate): float
+    {
+        if ($type !== 'part') {
+            return $serviceRate;
+        }
+
+        return $item?->gst_rate !== null ? (float) $item->gst_rate : $partRate;
     }
 
     private function assertLinks(array $data): void
@@ -170,9 +236,14 @@ class EstimateService
             if ($description === '') {
                 throw ValidationException::withMessages(["items.$i.description" => $line['type'] === 'part' ? 'Choose the part, or describe it.' : 'Describe the service.']);
             }
+            $unit = trim((string) ($line['unit'] ?? '')) ?: $item?->unit_of_measure;
+            $details = trim((string) ($line['details'] ?? ''));
             $estimate->items()->create([
-                'type' => $line['type'], 'item_id' => $item?->id, 'description' => mb_substr($description, 0, 300),
-                'quantity' => $qty, 'unit_price' => $price, 'total' => (int) round($qty * $price), 'position' => $i,
+                'type' => $line['type'], 'item_id' => $item?->id, 'description' => mb_substr($description, 0, self::DESCRIPTION_MAX),
+                'details' => $details !== '' ? mb_substr($details, 0, self::DESCRIPTION_MAX) : null,
+                'quantity' => $qty, 'unit' => $unit ? mb_substr($unit, 0, 20) : null, 'unit_price' => $price,
+                'gst_rate' => isset($line['gst_rate']) ? (float) $line['gst_rate'] : null,
+                'total' => (int) round($qty * $price), 'position' => $i,
             ]);
         }
         $this->applyTotals($estimate, $tenant, $discount);
@@ -198,18 +269,20 @@ class EstimateService
         $lines = $items->map(fn ($l) => [
             'type' => $l->type,
             'description' => $l->description,
+            'details' => $l->details,
             'qty' => (float) $l->quantity,
             'gross' => (int) $l->total,
-            'uom' => $l->item?->unit_of_measure,
+            'uom' => $l->unit ?? $l->item?->unit_of_measure,
             'hsn' => $l->type === 'part' ? $l->item?->hsn_code : $sac,
-            // A plain estimate shows no tax: every line is taken at 0%.
-            'gst_rate' => ! $gst ? 0 : ($l->type === 'part' ? ($l->item?->gst_rate !== null ? (float) $l->item->gst_rate : $partRate) : $serviceRate),
+            // A plain estimate shows no tax: every line is taken at 0%. Otherwise the line's own rate, else Settings → GST.
+            'gst_rate' => ! $gst ? 0 : ($l->gst_rate ?? self::defaultRate($l->type, $l->item, $serviceRate, $partRate)),
         ])->all();
 
         $customer = Customer::withTrashed()->find($estimate->customer_id);
-        $ours = IndianStates::code($tenant->gstin) ?? IndianStates::code($tenant->state);
-        $theirs = IndianStates::code($customer?->gstin) ?? IndianStates::code($customer?->state);
-        $breakup = Gst::breakup($lines, $discount, $gst && $ours && $theirs && $ours !== $theirs);
+        $customerGstin = $gst ? ($estimate->customer_gstin ?: $customer?->gstin ?: null) : null;
+        $ours = IndianStates::resolve($tenant->gstin, $tenant->state);
+        $theirs = IndianStates::resolve($customerGstin, $customer?->state);
+        $breakup = Gst::breakup($lines, $discount, $gst && $ours && $theirs && $ours !== $theirs, ! $gst || $estimate->prices_include_gst);
 
         $estimate->forceFill([
             'total_service_charge' => $service,
@@ -221,7 +294,7 @@ class EstimateService
             'sgst_amount' => $breakup['totals']['sgst'],
             'igst_amount' => $breakup['totals']['igst'],
             'place_of_supply' => $gst ? IndianStates::name($theirs ?? $ours) : null,
-            'customer_gstin' => $gst ? ($customer?->gstin ?: null) : null,
+            'customer_gstin' => $customerGstin,
             'gst_breakup' => ['lines' => $breakup['lines'], 'summary' => $breakup['summary']],
         ])->save();
     }

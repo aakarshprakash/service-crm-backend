@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\Estimate;
+use App\Rules\Gstin;
 use App\Services\EstimateService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -31,7 +32,8 @@ class EstimateController extends Controller
             ->with(['customer:id,name,phone', 'job:id,crm_call_id', 'creator:id,name'])
             ->latest('estimate_date')->latest('id');
 
-        return $this->paginated($query->paginate($this->perPage($request)));
+        // Each row carries its customer link, so it can be shared on WhatsApp straight from the list.
+        return $this->paginated($query->paginate($this->perPage($request)), fn (Estimate $e) => $e->toArray() + ['share_url' => $this->estimates->shareUrl($e)]);
     }
 
     /** How many estimates are in each state, and what the open and approved ones are worth. */
@@ -70,7 +72,7 @@ class EstimateController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $estimate = Estimate::findOrFail($id);
-        $rules = collect($this->rules())->except('customer_id')->all();
+        $rules = collect($this->rules($estimate->id))->except('customer_id')->all();
         $rules['items'][0] = 'sometimes';
         $estimate = $this->estimates->update($estimate, $request->validate($rules, self::MESSAGES));
 
@@ -100,8 +102,9 @@ class EstimateController extends Controller
         $copy = $this->estimates->create([
             'customer_id' => $source->customer_id, 'job_id' => $source->job_id, 'customer_product_id' => $source->customer_product_id,
             'branch_id' => $source->branch_id, 'subject' => $source->subject, 'notes' => $source->notes, 'terms' => $source->terms,
-            'is_gst' => $source->is_gst, 'discount' => $source->discount_amount,
-            'items' => $source->items->map->only(['type', 'item_id', 'description', 'quantity', 'unit_price'])->all(),
+            'is_gst' => $source->is_gst, 'prices_include_gst' => $source->prices_include_gst, 'show_signature' => $source->show_signature,
+            'customer_gstin' => $source->customer_gstin, 'discount' => $source->discount_amount,
+            'items' => $source->items->map->only(['type', 'item_id', 'description', 'details', 'quantity', 'unit', 'unit_price', 'gst_rate'])->all(),
         ], $request->user());
 
         return $this->created($this->present($copy), "Copied as {$copy->estimate_number}.");
@@ -155,19 +158,30 @@ class EstimateController extends Controller
             ->search($request->string('search')->toString());
     }
 
+    /** The GST slabs an estimate can use for all its lines. */
+    public const GST_RATES = [0, 5, 12, 18, 28];
+
     private const MESSAGES = [
+        'estimate_number.unique' => 'Another estimate already has this number. Use a different one, or leave it blank to number it automatically.',
+        'estimate_number.regex' => 'Use letters, digits and - / _ . only, with no spaces, e.g. EST-2611-00010.',
+        'items.*.gst_rate.in' => 'Choose a GST rate: 0, 5, 12, 18 or 28%.',
+        'items.*.description.max' => 'Keep the item name under 2000 characters.',
+        'items.*.details.max' => 'Keep the description under 2000 characters.',
         'items.required' => 'Add at least one service or part.',
         'items.min' => 'Add at least one service or part.',
         'items.*.unit_price.required_if' => 'Enter the service charge.',
         'valid_until.after_or_equal' => 'The last valid day can’t be before the estimate date.',
     ];
 
-    private function rules(): array
+    private function rules(?int $estimateId = null): array
     {
         $tenantId = app(TenantContext::class)->id();
         $exists = fn (string $t) => Rule::exists($t, 'id')->where('tenant_id', $tenantId);
 
         return [
+            // Left blank, a new estimate is numbered automatically. A typed number must be new to this company.
+            'estimate_number' => ['nullable', 'string', 'max:40', 'regex:/^[A-Za-z0-9][A-Za-z0-9\-\/_.]*$/',
+                Rule::unique('estimates', 'estimate_number')->where('tenant_id', $tenantId)->ignore($estimateId)],
             'customer_id' => ['required', 'integer', $exists('customers')->whereNull('deleted_at')],
             'job_id' => ['nullable', 'integer', $exists('service_jobs')],
             'customer_product_id' => ['nullable', 'integer', $exists('customer_products')],
@@ -178,11 +192,19 @@ class EstimateController extends Controller
             'notes' => ['nullable', 'string', 'max:2000'],
             'terms' => ['nullable', 'string', 'max:3000'],
             'is_gst' => ['sometimes', 'boolean'],
+            // GST details: rates typed before GST (added on top) or including it (default from Settings → GST), and the customer's GSTIN.
+            'prices_include_gst' => ['sometimes', 'boolean'],
+            'show_signature' => ['sometimes', 'boolean'],
+            'customer_gstin' => ['nullable', 'string', new Gstin],
             'discount' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'items' => ['required', 'array', 'min:1', 'max:60'],
             'items.*.type' => ['required', Rule::in(['service', 'part'])],
             'items.*.item_id' => ['nullable', 'integer', $exists('inventory_items')],
-            'items.*.description' => ['nullable', 'string', 'max:300'],
+            'items.*.description' => ['nullable', 'string', 'max:'.EstimateService::DESCRIPTION_MAX],
+            'items.*.details' => ['nullable', 'string', 'max:'.EstimateService::DESCRIPTION_MAX],
+            'items.*.unit' => ['nullable', 'string', 'max:20'],
+            // Null: the rate from Settings → GST for a service, or the part's own rate.
+            'items.*.gst_rate' => ['nullable', 'numeric', Rule::in(self::GST_RATES)],
             'items.*.quantity' => ['required', 'numeric', 'gt:0', 'max:100000', 'decimal:0,3'],
             'items.*.unit_price' => ['required_if:items.*.type,service', 'nullable', 'integer', 'min:0', 'max:100000000'],
         ];

@@ -15,7 +15,7 @@ class Tenant extends Model
 
     protected $fillable = [
         'name', 'slug', 'status', 'timezone', 'currency', 'plan_id', 'email', 'phone', 'address',
-        'gstin', 'pan', 'state', 'logo_path', 'settings', 'trial_ends_at',
+        'gstin', 'pan', 'state', 'logo_path', 'signature_path', 'stamp_path', 'settings', 'trial_ends_at',
     ];
 
     protected $hidden = ['gateway_credentials', 'mail_credentials'];
@@ -59,10 +59,15 @@ class Tenant extends Model
         'attendance' => ['geofence' => 'off', 'geofence_technicians' => false, 'require_location' => false, 'auto_punch_out_at' => null],
         // GST (applies once the company GSTIN is set). Prices are GST-inclusive; rates in %.
         // job_bills / walkin_bills: whether a new bill starts as a GST or non-GST bill. Each bill can still be changed.
-        'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst'],
+        // estimates: how a new estimate starts (gst | non_gst). estimate_prices: whether the rates typed on a GST
+        // estimate are before GST, with GST added on top (before_gst), or include it (include_gst).
+        'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst', 'estimates' => 'gst', 'estimate_prices' => 'before_gst'],
         // Printed on invoices, for customers paying by bank transfer.
         'bank' => ['account_name' => null, 'bank_name' => null, 'account_no' => null, 'ifsc' => null, 'branch' => null],
         'invoice_template' => 'classic', // classic | modern
+        'estimate_template' => 'modern', // modern | classic-gst | minimal | letterhead
+        // Whether the company signature and stamp print by default. Estimates: on; invoices: off. Each estimate can override.
+        'signature' => ['estimates' => true, 'invoices' => false],
         // Estimates: letters before the number, how many days one stays valid, and the terms printed on it (null = the standard ones).
         'estimate_prefix' => 'EST',
         'estimates' => ['valid_days' => 15, 'terms' => null],
