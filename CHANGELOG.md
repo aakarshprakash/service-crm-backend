@@ -14,6 +14,7 @@
 - Lookups carry `tech_app.show_leave` (Settings; off by default) and `hard_delete`.
 
 ### Changed
+- **Simpler GST on the estimate PDF.** The "GST summary" table (HSN, rate, CGST, SGST per rate) and the CGST/SGST lines are gone. A GST estimate's totals now read Total, Total GST and the estimated total including GST. The GST amounts are still stored with the estimate and shown in the web app.
 - **A job left pending keeps its uploads.** When a new visit starts on a job that has earlier visits (the same technician resuming, or another one after the office reassigns it), the earlier photos (not signatures) and voice notes move into the new visit and the service summary is pre-filled with the last one, so the technician can edit, replace, delete and save them. Parts, charges and payments stay on the visit that billed them.
 - Office forms no longer require a purchase date for a unit marked in warranty (the technician app still asks for it).
 - A unit with no warranty expiry date counts as covered when it is marked in warranty, extended or AMC.

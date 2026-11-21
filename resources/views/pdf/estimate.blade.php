@@ -26,8 +26,6 @@
     .items tr.alt td { background: #f8fafc; }
     .totals td { padding: 3px 0; }
     .grand td { font-size: 13px; font-weight: bold; color: #0f3d63; border-top: 2px solid #0f6cbd; padding-top: 6px; }
-    .hsn th { font-size: 7.5px; text-transform: uppercase; color: #64748b; text-align: left; padding: 3px 4px; border-bottom: 1px solid #cbd5e1; }
-    .hsn td { padding: 3px 4px; font-size: 8.5px; border-bottom: 1px solid #f1f5f9; }
     .terms { white-space: pre-line; line-height: 1.5; }
     .foot { position: fixed; bottom: 0; left: 0; right: 0; background: #0f3d63; color: #c7d7e6; text-align: center; font-size: 8px; padding: 7px 30px; }
 </style>
@@ -140,22 +138,7 @@
     <table style="margin-top:14px">
         <tr>
             <td style="width:56%; vertical-align:top; padding-right:16px">
-                @if ($summary && (! $taxAdded || $singleRate === null || count($summary) > 1))
-                    <div class="label">GST summary</div>
-                    <table class="hsn">
-                        <tr><th>HSN/SAC</th><th>Rate</th><th class="right">Taxable</th>@if ($interState)<th class="right">IGST</th>@else<th class="right">CGST</th><th class="right">SGST</th>@endif</tr>
-                        @foreach ($summary as $s)
-                            <tr>
-                                <td>{{ $s['hsn'] ?? '—' }}</td>
-                                <td>{{ rtrim(rtrim(number_format($s['gst_rate'], 2), '0'), '.') }}%</td>
-                                <td class="right">{{ $money($s['taxable']) }}</td>
-                                @if ($interState)<td class="right">{{ $money($s['igst']) }}</td>@else<td class="right">{{ $money($s['cgst']) }}</td><td class="right">{{ $money($s['sgst']) }}</td>@endif
-                            </tr>
-                        @endforeach
-                    </table>
-                @endif
-
-                <div class="label" style="margin-top:10px">Amount in words</div>
+                <div class="label">Amount in words</div>
                 <div style="font-weight:bold">{{ $words }}</div>
 
                 @if ($estimate->notes)
@@ -165,36 +148,22 @@
             </td>
             <td style="vertical-align:top">
                 <table class="totals">
+                    @php $tax = $estimate->cgst_amount + $estimate->sgst_amount + $estimate->igst_amount; @endphp
                     @if ($taxAdded)
                         <tr><td class="strong">Total</td><td class="right strong">{{ $money($gross) }}</td></tr>
                         @if ($discount > 0)
                             <tr><td class="muted">Less discount</td><td class="right">- {{ $money($discount) }}</td></tr>
-                            <tr><td class="muted">Taxable value</td><td class="right">{{ $money($estimate->taxable_amount) }}</td></tr>
                         @endif
-                        @php $tax = $estimate->cgst_amount + $estimate->sgst_amount + $estimate->igst_amount; @endphp
-                        <tr><td class="strong">GST{{ $singleRate !== null ? ' @ '.$rate($singleRate).'%' : '' }}</td><td class="right strong">{{ $money($tax) }}</td></tr>
-                        {{-- Same state: the split into CGST and SGST. Another state is all IGST, which is the amount already shown above. --}}
-                        @unless ($interState)
-                            <tr>
-                                <td colspan="2" class="right muted" style="font-size:8px; padding-top:0">
-                                    CGST{{ $singleRate !== null ? ' '.$rate($singleRate / 2).'%' : '' }} {{ $money($estimate->cgst_amount) }}  ·  SGST{{ $singleRate !== null ? ' '.$rate($singleRate / 2).'%' : '' }} {{ $money($estimate->sgst_amount) }}
-                                </td>
-                            </tr>
-                        @endunless
+                        <tr><td class="strong">Total GST</td><td class="right strong">{{ $money($tax) }}</td></tr>
                     @elseif ($discount > 0)
                         <tr><td class="muted">Gross amount</td><td class="right">{{ $money($gross) }}</td></tr>
                         <tr><td class="muted">Discount</td><td class="right">- {{ $money($discount) }}</td></tr>
                     @endif
                     @if ($estimate->is_gst && ! $taxAdded)
-                        <tr><td class="muted">Taxable value</td><td class="right">{{ $money($estimate->taxable_amount) }}</td></tr>
-                        @if ($interState)
-                            <tr><td class="muted">IGST</td><td class="right">{{ $money($estimate->igst_amount) }}</td></tr>
-                        @else
-                            <tr><td class="muted">CGST</td><td class="right">{{ $money($estimate->cgst_amount) }}</td></tr>
-                            <tr><td class="muted">SGST</td><td class="right">{{ $money($estimate->sgst_amount) }}</td></tr>
-                        @endif
+                        <tr><td class="strong">Total</td><td class="right strong">{{ $money($estimate->taxable_amount) }}</td></tr>
+                        <tr><td class="strong">Total GST</td><td class="right strong">{{ $money($tax) }}</td></tr>
                     @endif
-                    <tr class="grand"><td>{{ $taxAdded ? 'Total amount including GST' : 'Estimated total' }}</td><td class="right">{{ $money($estimate->total_amount) }}</td></tr>
+                    <tr class="grand"><td>{{ $taxAdded ? 'Total amount including GST' : ($estimate->is_gst ? 'Estimated total incl. GST' : 'Estimated total') }}</td><td class="right">{{ $money($estimate->total_amount) }}</td></tr>
                 </table>
             </td>
         </tr>
