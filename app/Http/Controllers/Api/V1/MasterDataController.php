@@ -86,8 +86,21 @@ class MasterDataController extends Controller
             // Whether staff can choose GST / non-GST on a bill, and what a walk-in bill starts as.
             'billing' => [
                 'gst_registered' => (bool) $tenant->gstin,
+                // False when the saved GSTIN fails its check digit (a placeholder or a typo): the screens warn about it.
+                'gstin_valid' => \App\Support\IndianStates::isValidGstin($tenant->gstin),
                 'walkin_bills' => $tenant->setting('gst.walkin_bills'),
                 'job_bills' => $tenant->setting('gst.job_bills'),
+                // Settings → GST, which a new estimate follows: its rates per line and how it starts.
+                'service_rate' => (float) $tenant->setting('gst.service_rate', 18),
+                'part_rate' => (float) $tenant->setting('gst.part_rate', 18),
+                'estimates' => $tenant->setting('gst.estimates'),
+                'estimate_prices' => $tenant->setting('gst.estimate_prices'),
+            ],
+            // The company signature and stamp: whether they are uploaded, and whether a new estimate shows them by default.
+            'signature' => [
+                'has_signature' => (bool) $tenant->signature_path,
+                'has_stamp' => (bool) $tenant->stamp_path,
+                'on_estimates' => (bool) $tenant->setting('signature.estimates', true),
             ],
             // Whether permanent delete of test entries is switched on right now (Settings → Preferences).
             'hard_delete' => app(\App\Services\HardDeleteService::class)->enabled($tenant),

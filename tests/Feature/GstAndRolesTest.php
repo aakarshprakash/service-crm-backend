@@ -28,7 +28,7 @@ class GstAndRolesTest extends TestCase
     {
         $this->actingAsUser($this->admin)->putJson('/api/v1/settings/company', [
             'name' => 'Acme Services', 'timezone' => 'Asia/Kolkata', 'currency' => 'INR',
-            'gstin' => '32AABCU9603R1ZM', 'pan' => 'AABCU9603R', 'state' => 'Kerala',
+            'gstin' => '32AABCU9603R1ZW', 'pan' => 'AABCU9603R', 'state' => 'Kerala',
         ])->assertOk();
     }
 
@@ -89,7 +89,7 @@ class GstAndRolesTest extends TestCase
     public function test_customer_in_another_state_is_charged_igst(): void
     {
         $this->registerForGst();
-        $customer = $this->postJson('/api/v1/customers', ['name' => 'TN Traders', 'phone' => '9811100009', 'gstin' => '33AAACT1234A1Z5'])
+        $customer = $this->postJson('/api/v1/customers', ['name' => 'TN Traders', 'phone' => '9811100009', 'gstin' => '33AAACT1234A1Z8'])
             ->assertCreated()->json('data');
         $bill = $this->postJson('/api/v1/walk-in-bills', [
             'customer_id' => $customer['id'],
@@ -102,7 +102,7 @@ class GstAndRolesTest extends TestCase
         $this->assertSame(59001, $inv['taxable_amount'] + $inv['igst_amount']);
         $this->assertSame(50001, $inv['taxable_amount']); // 59001 / 1.18 = 50000.85 → 50001
         $this->assertSame('Tamil Nadu', $inv['place_of_supply']);
-        $this->assertSame('33AAACT1234A1Z5', $inv['customer_gstin']);
+        $this->assertSame('33AAACT1234A1Z8', $inv['customer_gstin']);
     }
 
     public function test_profit_and_loss_excludes_gst_exactly_across_part_payments(): void

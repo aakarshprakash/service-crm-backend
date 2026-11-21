@@ -406,6 +406,8 @@ Route::prefix('v1')->group(function () {
             Route::get('invoice-preview', [SettingsController::class, 'invoicePreview']);
             Route::post('email/test', [SettingsController::class, 'testEmail'])->middleware('throttle:5,1');
             Route::post('logo', [SettingsController::class, 'uploadLogo']);
+            Route::post('branding/{kind}', [SettingsController::class, 'uploadBrandImage'])->whereIn('kind', ['signature', 'stamp']);
+            Route::delete('branding/{kind}', [SettingsController::class, 'deleteBrandImage'])->whereIn('kind', ['signature', 'stamp']);
             Route::get('templates', [SettingsController::class, 'templates']);
             Route::put('templates', [SettingsController::class, 'saveTemplate']);
         });
@@ -417,6 +419,7 @@ Route::prefix('v1')->group(function () {
             Route::delete('{type}/{id}', [HardDeleteController::class, 'destroy'])->whereIn('type', ['job', 'customer', 'invoice', 'payment', 'expense', 'income'])->whereNumber('id')->middleware('throttle:30,1');
         });
         Route::get('settings/logo', [SettingsController::class, 'logo'])->middleware('can:dashboard.view');
+        Route::get('settings/branding/{kind}', [SettingsController::class, 'brandImage'])->whereIn('kind', ['signature', 'stamp'])->middleware('can:dashboard.view');
         Route::get('audit-logs', [SettingsController::class, 'auditLogs'])->middleware('can:audit.view');
 
         // Customer portal (§5.11)

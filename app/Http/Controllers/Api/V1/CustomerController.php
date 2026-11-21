@@ -7,6 +7,7 @@ use App\Models\Customer;
 use App\Models\CustomerProduct;
 use App\Models\Invoice;
 use App\Models\User;
+use App\Rules\Gstin;
 use App\Support\Audit;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -156,7 +157,7 @@ class CustomerController extends Controller
             'phone' => [$req, 'string', 'regex:/^\+?[0-9]{10,15}$/'],
             'alt_phone' => ['nullable', 'string', 'regex:/^\+?[0-9]{10,15}$/'],
             'email' => ['nullable', 'email', 'max:150'],
-            'gstin' => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/'],
+            'gstin' => ['nullable', 'string', new Gstin(request()->has('state') ? request()->input('state') : $customer?->state)],
             'crm_id' => ['nullable', 'string', 'max:50', Rule::unique('customers', 'crm_id')->where('tenant_id', $tenantId)->ignore($customer?->id)],
             'address' => ['nullable', 'string', 'max:500'],
             'city' => ['nullable', 'string', 'max:100'],
