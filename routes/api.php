@@ -171,6 +171,7 @@ Route::prefix('v1')->group(function () {
             Route::get('jobs/location-analysis', [JobController::class, 'locationAnalysis']);
             Route::get('jobs/calendar', [JobController::class, 'calendar']);
             Route::get('jobs/{id}', [JobController::class, 'show'])->whereNumber('id');
+            Route::get('jobs/{id}/previous-services', [JobController::class, 'previousServicesList'])->whereNumber('id');
             Route::get('jobs/{id}/job-card', [JobController::class, 'jobCard'])->whereNumber('id');
             Route::get('jobs/{id}/photos.zip', [JobController::class, 'photosZip'])->whereNumber('id')->middleware('throttle:exports');
             Route::post('jobs/{id}/feedback', [JobController::class, 'feedback'])->whereNumber('id')->middleware('throttle:30,1');
@@ -273,6 +274,7 @@ Route::prefix('v1')->group(function () {
 
         // HR (v2.1): self service for every staff member…
         Route::middleware('can:self.service')->prefix('my')->group(function () {
+            Route::get('punch', [HrController::class, 'myPunch']);
             Route::get('attendance', [HrController::class, 'myAttendance']);
             Route::get('leaves', [HrController::class, 'myLeaves']);
             Route::post('leaves', [HrController::class, 'applyLeave']);
@@ -404,6 +406,8 @@ Route::prefix('v1')->group(function () {
             Route::get('invoice-preview', [SettingsController::class, 'invoicePreview']);
             Route::post('email/test', [SettingsController::class, 'testEmail'])->middleware('throttle:5,1');
             Route::post('logo', [SettingsController::class, 'uploadLogo']);
+            Route::post('branding/{kind}', [SettingsController::class, 'uploadBrandImage'])->whereIn('kind', ['signature', 'stamp']);
+            Route::delete('branding/{kind}', [SettingsController::class, 'deleteBrandImage'])->whereIn('kind', ['signature', 'stamp']);
             Route::get('templates', [SettingsController::class, 'templates']);
             Route::put('templates', [SettingsController::class, 'saveTemplate']);
         });
@@ -415,6 +419,7 @@ Route::prefix('v1')->group(function () {
             Route::delete('{type}/{id}', [HardDeleteController::class, 'destroy'])->whereIn('type', ['job', 'customer', 'invoice', 'payment', 'expense', 'income'])->whereNumber('id')->middleware('throttle:30,1');
         });
         Route::get('settings/logo', [SettingsController::class, 'logo'])->middleware('can:dashboard.view');
+        Route::get('settings/branding/{kind}', [SettingsController::class, 'brandImage'])->whereIn('kind', ['signature', 'stamp'])->middleware('can:dashboard.view');
         Route::get('audit-logs', [SettingsController::class, 'auditLogs'])->middleware('can:audit.view');
 
         // Customer portal (§5.11)

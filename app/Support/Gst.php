@@ -3,7 +3,10 @@
 namespace App\Support;
 
 /**
- * GST breakup for GST-inclusive prices, in integer paise only (no floats in any total).
+ * GST breakup in integer paise only (no floats in any total). Prices include GST unless the caller
+ * says they are before GST, in which case tax = round(taxable × rate / 100) is added to each line.
+ *
+ * For GST-inclusive prices:
  *
  * Each line's net amount (after its share of the bill discount) is split into
  *   taxable = round(net × 100 / (100 + rate))   and   tax = net − taxable,
@@ -16,7 +19,7 @@ class Gst
      * @param  list<array{type: string, description: string, hsn: ?string, qty: float|int, gross: int, gst_rate: float|int}>  $lines
      * @return array{lines: list<array>, summary: list<array>, totals: array{gross: int, discount: int, taxable: int, cgst: int, sgst: int, igst: int, tax: int, total: int}}
      */
-    public static function breakup(array $lines, ?int $discount = 0, bool $interState = false): array
+    public static function breakup(array $lines, ?int $discount = 0, bool $interState = false, bool $pricesIncludeGst = true): array
     {
         $discount ??= 0;
         $shares = self::allocate(array_map(fn ($l) => max(0, (int) $l['gross']), $lines), $discount);
@@ -24,16 +27,18 @@ class Gst
         $out = [];
         foreach ($lines as $i => $l) {
             $gross = (int) $l['gross'];
-            $net = $gross - $shares[$i];
             $rate = round((float) $l['gst_rate'], 2);
-            $taxable = self::taxable($net, $rate);
-            $tax = $net - $taxable;
+            // Prices before GST: the line (after discount) is the taxable value and GST is added on top.
+            $taxable = $pricesIncludeGst ? self::taxable($gross - $shares[$i], $rate) : $gross - $shares[$i];
+            $tax = $pricesIncludeGst ? $gross - $shares[$i] - $taxable : self::taxOn($taxable, $rate);
+            $net = $taxable + $tax;
             $cgst = $interState ? 0 : intdiv($tax, 2);
             $sgst = $interState ? 0 : $tax - $cgst;
             $qty = (float) $l['qty'];
             $out[] = [
                 'type' => $l['type'],
                 'description' => $l['description'],
+                'details' => $l['details'] ?? null,
                 'hsn' => $l['hsn'] ?: null,
                 'uom' => $l['uom'] ?? null,
                 'qty' => $qty,
@@ -89,6 +94,18 @@ class Gst
         $value = intdiv($abs * 10000 * 2 + $divisor, 2 * $divisor);
 
         return $inclusive < 0 ? -$value : $value;
+    }
+
+    /** GST added on top of a taxable value, rounded half away from zero to the paisa. */
+    public static function taxOn(int $taxable, float $rate): int
+    {
+        if ($rate <= 0 || $taxable === 0) {
+            return 0;
+        }
+        $bp = (int) round($rate * 100); // basis points: 18% → 1800
+        $value = intdiv(abs($taxable) * $bp * 2 + 10000, 20000);
+
+        return $taxable < 0 ? -$value : $value;
     }
 
     /**

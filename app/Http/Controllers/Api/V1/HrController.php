@@ -69,6 +69,18 @@ class HrController extends Controller
         ], $message);
     }
 
+    /** On duty or not, since when, and where this person may punch in (office staff and technicians). */
+    public function myPunch(Request $request): JsonResponse
+    {
+        $user = $request->user()->fresh();
+
+        return $this->ok([
+            'punch_status' => $user->punch_status,
+            'punched_at' => $user->punched_at,
+            'attendance' => $this->attendance->rules($user),
+        ]);
+    }
+
     public function myAttendance(Request $request): JsonResponse
     {
         [$from, $to, $month] = $this->month($request);

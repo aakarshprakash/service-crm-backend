@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- `GET /my/punch` (every staff member): on duty or not, since when, and the punch rules (`attendance`: geofence, office location and radius, location and punch-in requirements, auto punch-out time, shift). Used by the Servon Manager app's punch-in. The technician dashboard's `attendance` block now comes from the same `AttendanceService::rules()`.
 - **Estimates.** `estimates` / `estimate_items` tables. `GET/POST /estimates`, `GET /estimates/summary`, `GET/PATCH/DELETE /estimates/{id}`, `POST /estimates/{id}/status` (draft, sent, approved, rejected), `POST /estimates/{id}/duplicate`, `GET /estimates/{id}/pdf`, and the public `GET /estimate/{token}/pdf` behind the shared link. Abilities `estimates.view` / `estimates.manage`. GST is split out the same way as on invoices. An estimate never moves stock or money.
 - **Customer feedback on jobs.** `service_jobs.feedback_taken_at / feedback_taken_by / feedback_note`. The technician enters the Customer Satisfaction Code on site during the visit; the code by itself does not mark feedback collected. The office records the customer's feedback and marks it collected with `POST /jobs/{id}/feedback` (office only, `jobs.manage`); a rating on the portal counts too. Jobs carry `feedback_pending`; `GET /jobs?quick=feedback_pending`. A completed job stays in the technician's list until the office collects feedback (`jobs.tech_keep_until_feedback`, on by default). Jobs completed before this release count as taken. The web job detail shows the satisfaction code and remarks as an always-editable card; the Jobs list badges feedback as pending (amber) or collected (green, once both the code and the remarks are in).
 - `GET /jobs?warranty=under|out`.
@@ -13,6 +14,7 @@
 - Lookups carry `tech_app.show_leave` (Settings; off by default) and `hard_delete`.
 
 ### Changed
+- **A job left pending keeps its uploads.** When a new visit starts on a job that has earlier visits (the same technician resuming, or another one after the office reassigns it), the earlier photos (not signatures) and voice notes move into the new visit and the service summary is pre-filled with the last one, so the technician can edit, replace, delete and save them. Parts, charges and payments stay on the visit that billed them.
 - Office forms no longer require a purchase date for a unit marked in warranty (the technician app still asks for it).
 - A unit with no warranty expiry date counts as covered when it is marked in warranty, extended or AMC.
 - **Faster accounts pages.** Cash and bank balances are added up by the database instead of reading every entry since the books opened; cash held by technicians is worked out for everyone in four queries instead of several per technician. New indexes on `payments (tenant_id, status, paid_at)` and `job_visits (tenant_id, technician_id, start_time)`.

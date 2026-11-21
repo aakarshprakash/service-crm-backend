@@ -10,6 +10,7 @@ use App\Services\NotificationService;
 use App\Services\InvoiceService;
 use App\Services\TenantMailer;
 use App\Models\Invoice;
+use App\Rules\Gstin;
 use App\Support\IndianStates;
 use Illuminate\Http\Response;
 use App\Support\DocumentNumber;
@@ -36,6 +37,8 @@ class SettingsController extends Controller
             'states' => array_values(IndianStates::STATES),
             'invoice_templates' => InvoiceService::TEMPLATES,
             'has_logo' => (bool) $tenant->logo_path,
+            'has_signature' => (bool) $tenant->signature_path,
+            'has_stamp' => (bool) $tenant->stamp_path,
             'settings' => $tenant->mergedSettings(),
             'plan' => $tenant->plan,
             'features' => collect(SubscriptionPlan::FEATURES)->mapWithKeys(fn ($f) => [$f => $tenant->feature($f)]),
@@ -60,7 +63,7 @@ class SettingsController extends Controller
             'email' => ['nullable', 'email', 'max:150'],
             'phone' => ['nullable', 'string', 'max:20'],
             'address' => ['nullable', 'string', 'max:500'],
-            'gstin' => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/'],
+            'gstin' => ['nullable', 'string', new Gstin($request->input('state'))],
             'pan' => ['nullable', 'string', 'regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/'],
             'state' => ['nullable', Rule::in(array_values(IndianStates::STATES))],
             'timezone' => ['required', 'timezone:all'],
@@ -119,6 +122,8 @@ class SettingsController extends Controller
             'gst.part_rate' => ['sometimes', 'numeric', Rule::in([0, 5, 12, 18, 28])],
             'gst.job_bills' => ['sometimes', Rule::in(['gst', 'non_gst'])],
             'gst.walkin_bills' => ['sometimes', Rule::in(['gst', 'non_gst'])],
+            'gst.estimates' => ['sometimes', Rule::in(['gst', 'non_gst'])],
+            'gst.estimate_prices' => ['sometimes', Rule::in(['before_gst', 'include_gst'])],
             'bank' => ['sometimes', 'array'],
             'bank.account_name' => ['nullable', 'string', 'max:150'],
             'bank.bank_name' => ['nullable', 'string', 'max:100'],
@@ -130,6 +135,9 @@ class SettingsController extends Controller
             'estimates' => ['sometimes', 'array'],
             'estimates.valid_days' => ['sometimes', 'integer', 'min:1', 'max:365'],
             'estimates.terms' => ['nullable', 'string', 'max:3000'],
+            'signature' => ['sometimes', 'array'],
+            'signature.estimates' => ['sometimes', 'boolean'],
+            'signature.invoices' => ['sometimes', 'boolean'],
             'photo_types' => ['sometimes', 'array', 'min:1', 'max:20'],
             'photo_types.*.key' => ['nullable', 'string', 'max:20'],
             'photo_types.*.label' => ['required', 'string', 'max:40', 'distinct:ignore_case'],
@@ -310,6 +318,47 @@ class SettingsController extends Controller
         abort_unless($tenant->logo_path && Storage::disk('private')->exists($tenant->logo_path), 404);
 
         return Storage::disk('private')->response($tenant->logo_path, null, ['Cache-Control' => 'private, max-age=3600']);
+    }
+
+    /** The column each brand image is stored in. A transparent PNG is best for a signature or stamp. */
+    private const BRAND_IMAGES = ['signature' => 'signature_path', 'stamp' => 'stamp_path'];
+
+    /** Upload the company signature or stamp/seal image (private storage, like the logo). */
+    public function uploadBrandImage(Request $request, string $kind): JsonResponse
+    {
+        abort_unless(isset(self::BRAND_IMAGES[$kind]), 404);
+        $request->validate([$kind => ['required', 'image', 'mimes:png,jpg,jpeg', 'max:1024', 'dimensions:max_width=2000,max_height=2000']]);
+        $tenant = app(TenantContext::class)->tenant();
+        $column = self::BRAND_IMAGES[$kind];
+        if ($tenant->{$column}) {
+            Storage::disk('private')->delete($tenant->{$column});
+        }
+        $tenant->update([$column => $request->file($kind)->store("tenants/{$tenant->id}/branding", 'private')]);
+
+        return $this->ok(["has_{$kind}" => true], ucfirst($kind).' updated.');
+    }
+
+    public function deleteBrandImage(string $kind): JsonResponse
+    {
+        abort_unless(isset(self::BRAND_IMAGES[$kind]), 404);
+        $tenant = app(TenantContext::class)->tenant();
+        $column = self::BRAND_IMAGES[$kind];
+        if ($tenant->{$column}) {
+            Storage::disk('private')->delete($tenant->{$column});
+            $tenant->update([$column => null]);
+        }
+
+        return $this->ok(["has_{$kind}" => false], ucfirst($kind).' removed.');
+    }
+
+    public function brandImage(string $kind): StreamedResponse
+    {
+        abort_unless(isset(self::BRAND_IMAGES[$kind]), 404);
+        $tenant = app(TenantContext::class)->tenant();
+        $path = $tenant->{self::BRAND_IMAGES[$kind]};
+        abort_unless($path && Storage::disk('private')->exists($path), 404);
+
+        return Storage::disk('private')->response($path, null, ['Cache-Control' => 'private, max-age=3600']);
     }
 
     public function templates(): JsonResponse

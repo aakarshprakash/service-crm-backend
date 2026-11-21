@@ -11,12 +11,13 @@ class EstimateItem extends Model
 {
     use BelongsToTenant;
 
-    protected $fillable = ['estimate_id', 'type', 'item_id', 'description', 'quantity', 'unit_price', 'total', 'position'];
+    protected $fillable = ['estimate_id', 'type', 'item_id', 'description', 'details', 'quantity', 'unit', 'unit_price', 'gst_rate', 'total', 'position'];
 
     protected function casts(): array
     {
         return [
             'quantity' => 'float',
+            'gst_rate' => 'float',
             'unit_price' => 'integer',
             'total' => 'integer',
             'position' => 'integer',

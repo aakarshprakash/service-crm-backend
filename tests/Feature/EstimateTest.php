@@ -76,6 +76,39 @@ class EstimateTest extends TestCase
         $this->get("/api/v1/estimates/{$estimate['id']}/pdf")->assertOk()->assertHeader('content-type', 'application/pdf');
     }
 
+    public function test_the_estimate_number_can_be_typed_and_edited_but_never_repeated(): void
+    {
+        $customer = $this->makeCustomer($this->tenant);
+        $this->actingAsUser($this->admin);
+
+        // Typed, it is used as it is; left blank, the next automatic number is given.
+        $typed = $this->postJson('/api/v1/estimates', $this->payload($customer->id, ['estimate_number' => 'QT/2026-27/014']))->assertCreated()
+            ->assertJsonPath('data.estimate_number', 'QT/2026-27/014')->json('data');
+        $auto = $this->postJson('/api/v1/estimates', $this->payload($customer->id))->assertCreated()->json('data');
+        $this->assertMatchesRegularExpression('/^EST-\d{4}-00001$/', $auto['estimate_number']);
+
+        // An automatic number skips one a person already typed.
+        $this->postJson('/api/v1/estimates', $this->payload($customer->id, ['estimate_number' => preg_replace('/00001$/', '00002', $auto['estimate_number'])]))->assertCreated();
+        $next = $this->postJson('/api/v1/estimates', $this->payload($customer->id))->assertCreated()->json('data.estimate_number');
+        $this->assertMatchesRegularExpression('/00003$/', $next);
+
+        // The same number twice, or with spaces, is refused with a plain message.
+        $this->postJson('/api/v1/estimates', $this->payload($customer->id, ['estimate_number' => 'QT/2026-27/014']))->assertStatus(422)->assertJsonValidationErrors('estimate_number');
+        $this->postJson('/api/v1/estimates', $this->payload($customer->id, ['estimate_number' => 'QT 014']))->assertStatus(422)->assertJsonValidationErrors('estimate_number');
+
+        // Edited while open; keeping its own number is fine, a blank one keeps it, another's number is refused.
+        $this->patchJson("/api/v1/estimates/{$typed['id']}", ['estimate_number' => 'QT-15'])->assertOk()->assertJsonPath('data.estimate_number', 'QT-15');
+        $this->patchJson("/api/v1/estimates/{$typed['id']}", ['estimate_number' => 'QT-15', 'subject' => 'Same number'])->assertOk();
+        $this->patchJson("/api/v1/estimates/{$typed['id']}", ['estimate_number' => ''])->assertOk()->assertJsonPath('data.estimate_number', 'QT-15');
+        $this->patchJson("/api/v1/estimates/{$typed['id']}", ['estimate_number' => $auto['estimate_number']])->assertStatus(422)->assertJsonValidationErrors('estimate_number');
+
+        // A decided estimate keeps its number until it is reopened; a copy is numbered afresh.
+        $this->postJson("/api/v1/estimates/{$typed['id']}/status", ['status' => 'approved'])->assertOk();
+        $this->patchJson("/api/v1/estimates/{$typed['id']}", ['estimate_number' => 'QT-16'])->assertStatus(422);
+        $copy = $this->postJson("/api/v1/estimates/{$typed['id']}/duplicate")->assertCreated()->json('data.estimate_number');
+        $this->assertNotSame('QT-15', $copy);
+    }
+
     public function test_it_is_sent_then_decided_and_locked_until_reopened(): void
     {
         $customer = $this->makeCustomer($this->tenant);
@@ -126,7 +159,7 @@ class EstimateTest extends TestCase
         $customer = $this->makeCustomer($this->tenant, ['state' => 'Karnataka']);
         $this->actingAsUser($this->admin);
 
-        $gst = $this->postJson('/api/v1/estimates', ['customer_id' => $customer->id, 'is_gst' => true, 'items' => [['type' => 'service', 'description' => 'Labour', 'quantity' => 1, 'unit_price' => 118000]]])
+        $gst = $this->postJson('/api/v1/estimates', ['customer_id' => $customer->id, 'is_gst' => true, 'prices_include_gst' => true, 'items' => [['type' => 'service', 'description' => 'Labour', 'quantity' => 1, 'unit_price' => 118000]]])
             ->assertCreated()->json('data');
         $this->assertSame(118000, $gst['total_amount']);
         $this->assertSame(100000, $gst['taxable_amount']);

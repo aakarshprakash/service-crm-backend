@@ -76,10 +76,16 @@ class TechnicianJobFlowTest extends TestCase
         ]));
         $job = $this->makeJob($tenant, $customer, $tech, ['customer_product_id' => $productId]);
 
-        $this->actingAsUser($tech)->getJson("/api/v1/jobs/{$job->id}")->assertOk()
-            ->assertJsonCount(1, 'data.previous_services')
-            ->assertJsonPath('data.previous_services.0.summary', 'Gas top-up done')
-            ->assertJsonPath('data.previous_services.0.crm_call_id', $old->crm_call_id);
+        // Not sent with the job: the app asks for them only when the technician opens the list.
+        $this->actingAsUser($tech)->getJson("/api/v1/jobs/{$job->id}")->assertOk()->assertJsonMissingPath('data.previous_services');
+        $this->getJson("/api/v1/jobs/{$job->id}/previous-services")->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.summary', 'Gas top-up done')
+            ->assertJsonPath('data.0.crm_call_id', $old->crm_call_id);
+
+        // Another technician's job isn't theirs to look into.
+        $other = $this->makeUser($tenant, Role::Technician);
+        $this->forgetGuards()->actingAsUser($other)->getJson("/api/v1/jobs/{$job->id}/previous-services")->assertNotFound();
     }
 
     public function test_visit_times_sent_with_an_offset_are_stored_in_utc(): void

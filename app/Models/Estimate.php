@@ -23,7 +23,7 @@ class Estimate extends Model
     protected $fillable = [
         'estimate_number', 'customer_id', 'customer_product_id', 'job_id', 'branch_id', 'status', 'estimate_date', 'valid_until',
         'subject', 'notes', 'terms', 'total_service_charge', 'total_spare_charge', 'discount_amount', 'total_amount', 'is_gst',
-        'taxable_amount', 'cgst_amount', 'sgst_amount', 'igst_amount', 'place_of_supply', 'customer_gstin', 'gst_breakup',
+        'prices_include_gst', 'show_signature', 'taxable_amount', 'cgst_amount', 'sgst_amount', 'igst_amount', 'place_of_supply', 'customer_gstin', 'gst_breakup',
         'share_token', 'sent_at', 'decided_at', 'decided_by', 'decision_note', 'created_by',
     ];
 
@@ -41,6 +41,8 @@ class Estimate extends Model
             'discount_amount' => 'integer',
             'total_amount' => 'integer',
             'is_gst' => 'boolean',
+            'prices_include_gst' => 'boolean',
+            'show_signature' => 'boolean',
             'taxable_amount' => 'integer',
             'cgst_amount' => 'integer',
             'sgst_amount' => 'integer',

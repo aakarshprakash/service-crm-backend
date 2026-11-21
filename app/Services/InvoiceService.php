@@ -82,8 +82,8 @@ class InvoiceService
         }
 
         $customer = Customer::withTrashed()->find($invoice->customer_id);
-        $ours = IndianStates::code($tenant->gstin) ?? IndianStates::code($tenant->state);
-        $theirs = IndianStates::code($customer?->gstin) ?? IndianStates::code($customer?->state);
+        $ours = IndianStates::resolve($tenant->gstin, $tenant->state);
+        $theirs = IndianStates::resolve($customer?->gstin, $customer?->state);
         $interState = $ours && $theirs && $ours !== $theirs;
 
         $gst = Gst::breakup($this->gstLines($invoice, $tenant), $invoice->discount_amount, $interState);
@@ -216,8 +216,8 @@ class InvoiceService
         if ($tenant->logo_path && Storage::disk('private')->exists($tenant->logo_path)) {
             $logo = 'data:image/png;base64,'.base64_encode(Storage::disk('private')->get($tenant->logo_path));
         }
-        $companyState = IndianStates::code($tenant->gstin) ?? IndianStates::code($tenant->state);
-        $customerState = IndianStates::code($invoice->customer?->gstin) ?? IndianStates::code($invoice->customer?->state);
+        $companyState = IndianStates::resolve($tenant->gstin, $tenant->state);
+        $customerState = IndianStates::resolve($invoice->customer?->gstin, $invoice->customer?->state);
 
         // Tax totals by rate, for designs that list "CGST @ 9%" line by line.
         $taxRates = [];
