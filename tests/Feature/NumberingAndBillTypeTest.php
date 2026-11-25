@@ -369,4 +369,21 @@ class NumberingAndBillTypeTest extends TestCase
         $this->assertSame(118000, $invoice->total_amount);
         $this->assertSame(100000, $invoice->taxable_amount);
     }
+
+    public function test_the_invoice_list_filters_by_gst_style(): void
+    {
+        $this->registerForGst();
+        $exclusive = $this->walkIn(['is_gst' => true, 'prices_include_gst' => false])['id'];
+        $inclusive = $this->walkIn(['is_gst' => true, 'prices_include_gst' => true])['id'];
+        $plain = $this->walkIn(['is_gst' => false])['id'];
+        $ids = fn (string $gst) => collect($this->getJson("/api/v1/invoices?gst={$gst}")->assertOk()->json('data'))->pluck('id')->sort()->values()->all();
+
+        $this->assertSame([$exclusive, $inclusive], $ids('gst'));
+        $this->assertSame([$exclusive], $ids('exclusive'));
+        $this->assertSame([$inclusive], $ids('inclusive'));
+        $this->assertSame([$plain], $ids('non_gst'));
+        $this->assertCount(3, $ids(''));
+        // The totals above the list follow the filter.
+        $this->getJson('/api/v1/invoices?gst=non_gst')->assertJsonPath('meta.totals.total', 118000);
+    }
 }

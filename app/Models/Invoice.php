@@ -4,13 +4,14 @@ namespace App\Models;
 
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
+use App\Models\Concerns\HasGstStyle;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Invoice extends Model
 {
-    use Auditable, BelongsToTenant;
+    use Auditable, BelongsToTenant, HasGstStyle;
 
     protected $fillable = [
         'job_id', 'source', 'customer_id', 'branch_id', 'invoice_number', 'total_service_charge', 'total_spare_charge', 'discount_amount',

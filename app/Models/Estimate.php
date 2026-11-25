@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
+use App\Models\Concerns\HasGstStyle;
 use App\Support\TenantContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -16,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Estimate extends Model
 {
-    use Auditable, BelongsToTenant;
+    use Auditable, BelongsToTenant, HasGstStyle;
 
     public const STATUSES = ['draft', 'sent', 'approved', 'rejected'];
 

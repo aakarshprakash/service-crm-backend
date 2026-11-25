@@ -165,4 +165,20 @@ class EstimateGstDetailsTest extends TestCase
         $this->postJson('/api/v1/customers', ['name' => 'Bad', 'phone' => '9811100001', 'gstin' => '32ABCDE1234F1Z5'])->assertStatus(422)->assertJsonValidationErrors('gstin');
         $this->postJson('/api/v1/customers', ['name' => 'Good', 'phone' => '9811100002', 'gstin' => '32ABCDE1234F1Z9', 'state' => 'Kerala'])->assertCreated();
     }
+
+    public function test_the_estimate_list_and_its_counts_filter_by_gst_style(): void
+    {
+        $customer = $this->makeCustomer($this->tenant);
+        $make = fn (array $gst) => $this->postJson('/api/v1/estimates', ['customer_id' => $customer->id] + $gst + $this->line())->assertCreated()->json('data.id');
+        $exclusive = $make(['is_gst' => true, 'prices_include_gst' => false]);
+        $inclusive = $make(['is_gst' => true, 'prices_include_gst' => true]);
+        $plain = $make(['is_gst' => false]);
+        $ids = fn (string $gst) => collect($this->getJson("/api/v1/estimates?gst={$gst}")->assertOk()->json('data'))->pluck('id')->sort()->values()->all();
+
+        $this->assertSame([$exclusive, $inclusive], $ids('gst'));
+        $this->assertSame([$exclusive], $ids('exclusive'));
+        $this->assertSame([$inclusive], $ids('inclusive'));
+        $this->assertSame([$plain], $ids('non_gst'));
+        $this->getJson('/api/v1/estimates/summary?gst=gst')->assertOk()->assertJsonPath('data.draft', 2);
+    }
 }
