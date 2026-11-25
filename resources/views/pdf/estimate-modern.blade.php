@@ -20,6 +20,9 @@
     .card { background: #f1f5f9; border-radius: 6px; padding: 9px 11px; }
     .meta td { padding: 2px 0; }
     .items th { background: #0f3d63; color: #fff; padding: 6px 5px; font-size: 8.5px; text-align: left; }
+    /* Headings line up with their numbers (".items th" would otherwise win over ".right"). */
+    .items th.right { text-align: right; }
+    .items th.center { text-align: center; }
     .items td { padding: 6px 5px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
     .items td.desc { line-height: 1.45; }
     .strong { font-weight: bold; color: #1e293b; }
@@ -89,8 +92,12 @@
     @endif
 
     @php
-        // Inclusive GST shows the tax split on every line; GST added on top (or no GST) keeps the line to qty × rate.
-        $splitLines = $estimate->is_gst && ! $taxAdded;
+        // As on the screen: with GST every line shows its rate as typed, its taxable value, its GST and what it comes to with GST
+        // (no HSN/SAC here: the Classic GST design carries it).
+        // GST added: 1,000 at 18% is 1,180. GST included: 1,000 stays 1,000 with 152.54 GST inside.
+        // With a discount the GST and amount are after the line's share of it, so the lines add up to the total.
+        $gst = (bool) $estimate->is_gst;
+        $withDiscount = $discount > 0;
         $unitPrice = fn ($l) => (float) $l['qty'] > 0 ? (int) round($l['gross'] / (float) $l['qty']) : $l['gross'];
     @endphp
     <table class="items" style="margin-top:{{ $estimate->subject ? '8px' : '16px' }}">
@@ -98,17 +105,16 @@
             <tr>
                 <th style="width:4%">#</th>
                 <th>Item description</th>
-                @if ($estimate->is_gst)<th style="width:9%">HSN/SAC</th>@endif
-                <th class="center" style="width:7%">Unit</th>
-                <th class="right" style="width:6%">Qty</th>
-                <th class="right" style="width:12%">Rate</th>
-                @if ($splitLines && $discount > 0)<th class="right" style="width:9%">Disc.</th>@endif
-                @if ($splitLines)
+                <th class="center" style="width:6%">Unit</th>
+                <th class="right" style="width:5%">Qty</th>
+                <th class="right" style="width:11%">{{ $gst && ! $taxAdded ? 'Rate incl. GST' : 'Rate' }}</th>
+                @if ($gst && $withDiscount)<th class="right" style="width:8%">Disc.</th>@endif
+                @if ($gst)
                     <th class="right" style="width:11%">Taxable</th>
-                    <th class="right" style="width:6%">GST</th>
-                    <th class="right" style="width:10%">Tax</th>
+                    <th class="right" style="width:6%">Tax %</th>
+                    <th class="right" style="width:10%">{{ $withDiscount ? 'Tax after disc.' : 'Tax amount' }}</th>
                 @endif
-                <th class="right" style="width:13%">Amount</th>
+                <th class="right" style="width:13%">{{ ! $gst ? 'Amount' : ($withDiscount ? 'Amount after disc.' : 'Amount incl. GST') }}</th>
             </tr>
         </thead>
         <tbody>
@@ -119,17 +125,16 @@
                     <div style="{{ ! empty($l['details']) ? 'font-weight:bold' : '' }}">{!! nl2br(e($l['description'])) !!}</div>
                     @if (! empty($l['details']))<div class="muted" style="margin-top:2px">{!! nl2br(e($l['details'])) !!}</div>@endif
                 </td>
-                @if ($estimate->is_gst)<td class="muted">{{ $l['hsn'] ?? '—' }}</td>@endif
                 <td class="center">{{ $l['uom'] ?: '—' }}</td>
                 <td class="right">{{ $qty($l['qty']) }}</td>
-                <td class="right">{{ $money($splitLines ? $l['unit_taxable'] : $unitPrice($l)) }}</td>
-                @if ($splitLines && $discount > 0)<td class="right">{{ $l['discount'] ? $money($l['discount']) : '—' }}</td>@endif
-                @if ($splitLines)
+                <td class="right">{{ $money($unitPrice($l)) }}</td>
+                @if ($gst && $withDiscount)<td class="right">{{ $l['discount'] ? $money($l['discount']) : '—' }}</td>@endif
+                @if ($gst)
                     <td class="right">{{ $money($l['taxable']) }}</td>
                     <td class="right">{{ $rate($l['gst_rate']) }}%</td>
                     <td class="right">{{ $money($l['tax']) }}</td>
                 @endif
-                <td class="right"><strong>{{ $money($splitLines ? $l['net'] : $l['gross']) }}</strong></td>
+                <td class="right"><strong>{{ $money($gst ? $l['net'] : $l['gross']) }}</strong></td>
             </tr>
         @endforeach
         </tbody>

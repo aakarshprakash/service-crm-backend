@@ -404,6 +404,7 @@ Route::prefix('v1')->group(function () {
             Route::put('gateway', [SettingsController::class, 'updateGateway']);
             Route::put('email', [SettingsController::class, 'updateEmail']);
             Route::get('invoice-preview', [SettingsController::class, 'invoicePreview']);
+            Route::get('estimate-preview', [SettingsController::class, 'estimatePreview']);
             Route::post('email/test', [SettingsController::class, 'testEmail'])->middleware('throttle:5,1');
             Route::post('logo', [SettingsController::class, 'uploadLogo']);
             Route::post('branding/{kind}', [SettingsController::class, 'uploadBrandImage'])->whereIn('kind', ['signature', 'stamp']);

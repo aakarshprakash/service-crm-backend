@@ -30,6 +30,9 @@ class EstimateService
     /** Room for a full equipment specification, as on a supply quotation. */
     public const DESCRIPTION_MAX = 2000;
 
+    /** PDF designs, each a view `pdf.estimate-{name}`. The first is the standard one. */
+    public const TEMPLATES = ['modern', 'classic'];
+
     /** The standard terms when the rates are before GST and GST is added on top. */
     public const DEFAULT_TERMS_GST_ADDED = "GST is charged extra at the rate shown.\nParts not listed here are charged extra after your approval.\nWork starts once this estimate is approved.";
 
@@ -93,7 +96,9 @@ class EstimateService
                 'estimate_number',
                 'customer_product_id', 'job_id', 'branch_id', 'estimate_date', 'valid_until', 'subject', 'notes', 'terms', 'is_gst',
                 'prices_include_gst', 'show_signature', 'customer_gstin',
-            ])))->save();
+            ])));
+            $this->followGstChoiceInTerms($estimate);
+            $estimate->save();
             if (isset($data['items'])) {
                 $estimate->items()->delete();
                 $this->writeLines($estimate, $tenant, $data['items'], (int) ($data['discount'] ?? $estimate->discount_amount));
@@ -103,6 +108,18 @@ class EstimateService
 
             return $estimate;
         });
+    }
+
+    /**
+     * The standard terms say whether GST is extra or already in the price, so they follow the estimate's
+     * GST choice when it changes. Terms the company wrote itself are left exactly as they are.
+     */
+    private function followGstChoiceInTerms(Estimate $estimate): void
+    {
+        if (! in_array($estimate->terms, [self::DEFAULT_TERMS, self::DEFAULT_TERMS_GST_ADDED], true)) {
+            return;
+        }
+        $estimate->terms = $estimate->is_gst && ! $estimate->prices_include_gst ? self::DEFAULT_TERMS_GST_ADDED : self::DEFAULT_TERMS;
     }
 
     /** sent / approved / rejected, or back to draft to change it. */
@@ -149,7 +166,40 @@ class EstimateService
         return route('estimates.public-pdf', ['token' => $estimate->share_token]);
     }
 
-    public function pdf(Estimate $estimate): \Barryvdh\DomPDF\PDF
+    /** The estimate PDF view for a design: the one asked for, else the company's choice, else the standard one. */
+    public function viewFor(Tenant $tenant, ?string $template = null): string
+    {
+        foreach ([$template, $tenant->setting('estimate_template')] as $choice) {
+            if (in_array($choice, self::TEMPLATES, true)) {
+                return "pdf.estimate-{$choice}";
+            }
+        }
+
+        return 'pdf.estimate-'.self::TEMPLATES[0];
+    }
+
+    /** One entry per GST rate for the totals: CGST + SGST at half the rate each, or IGST at the full rate. */
+    private static function taxRates(array $summary): array
+    {
+        $rates = [];
+        foreach ($summary as $s) {
+            $key = (string) $s['gst_rate'];
+            $rates[$key] ??= ['rate' => self::percent($s['gst_rate']), 'half' => self::percent($s['gst_rate'] / 2), 'cgst' => 0, 'sgst' => 0, 'igst' => 0];
+            foreach (['cgst', 'sgst', 'igst'] as $k) {
+                $rates[$key][$k] += $s[$k];
+            }
+        }
+        ksort($rates, SORT_NUMERIC);
+
+        return array_values(array_filter($rates, fn ($r) => $r['cgst'] + $r['sgst'] + $r['igst'] > 0));
+    }
+
+    private static function percent(float|int|string $rate): string
+    {
+        return rtrim(rtrim(number_format((float) $rate, 2), '0'), '.');
+    }
+
+    public function pdf(Estimate $estimate, ?string $template = null): \Barryvdh\DomPDF\PDF
     {
         $tenant = Tenant::findOrFail($estimate->tenant_id);
         $estimate->loadMissing(['customer', 'branch', 'job:id,crm_call_id,complaint_type_id', 'job.complaintType:id,name',
@@ -165,7 +215,7 @@ class EstimateService
         $taxAdded = $estimate->is_gst && ! $estimate->prices_include_gst;
         $rates = array_values(array_unique(array_column($breakup['lines'], 'gst_rate')));
 
-        return Pdf::loadView('pdf.estimate', [
+        return Pdf::loadView($this->viewFor($tenant, $template), [
             'estimate' => $estimate,
             'tenant' => $tenant,
             'logo' => $logo,
@@ -178,7 +228,14 @@ class EstimateService
             // GST added on top: lines show the price before GST and the tax is one line under the total.
             'taxAdded' => $taxAdded,
             'singleRate' => count($rates) === 1 ? $rates[0] : null,
-            'rate' => fn ($r) => rtrim(rtrim(number_format((float) $r, 2), '0'), '.'),
+            'rate' => fn ($r) => self::percent($r),
+            // Classic design: plain amounts under "(Rs.)" headings, and the GST by rate.
+            'amount' => fn (int $v) => number_format($v / 100, 2),
+            'taxRates' => $estimate->is_gst ? self::taxRates($breakup['summary']) : [],
+            'companyStateName' => $companyState ? IndianStates::name($companyState) : $tenant->state,
+            'companyStateCode' => $companyState,
+            'customerStateName' => $customerState ? IndianStates::name($customerState) : $estimate->customer?->state,
+            'customerStateCode' => $customerState,
             'interState' => $estimate->igst_amount !== 0,
             'money' => fn (int $v) => Money::format($v, $currency),
             'qty' => fn ($q) => rtrim(rtrim(number_format((float) $q, 3), '0'), '.'),

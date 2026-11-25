@@ -201,7 +201,7 @@
             </td>
         </tr>
     </table>
-    <div class="muted" style="margin-top:12px; font-size:8px">@if ($invoice->is_gst)Prices are inclusive of GST. @endif This is a computer-generated invoice and does not require a physical signature.</div>
+    <div class="muted" style="margin-top:12px; font-size:8px">@if ($invoice->is_gst){{ $invoice->prices_include_gst === false ? 'GST is charged on top of the prices.' : 'Prices are inclusive of GST.' }} @endif This is a computer-generated invoice and does not require a physical signature.</div>
 </div>
 <div class="foot">Thank you for choosing {{ $tenant->name }}{{ $tenant->phone ? ' · '.$tenant->phone : '' }}</div>
 </body>

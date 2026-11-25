@@ -69,6 +69,23 @@ class EstimateGstDetailsTest extends TestCase
             ->assertJsonPath('data.taxable_amount', 58177627);
     }
 
+    public function test_switching_between_gst_added_and_gst_included_swaps_the_standard_terms_only(): void
+    {
+        $customer = $this->makeCustomer($this->tenant, ['state' => 'Kerala']);
+        $id = $this->postJson('/api/v1/estimates', ['customer_id' => $customer->id, 'is_gst' => true, 'prices_include_gst' => false] + $this->line())
+            ->assertCreated()->assertJsonPath('data.terms', \App\Services\EstimateService::DEFAULT_TERMS_GST_ADDED)->json('data.id');
+
+        // The form sends the terms back as they were; the standard wording follows the choice.
+        $this->patchJson("/api/v1/estimates/{$id}", ['prices_include_gst' => true, 'terms' => \App\Services\EstimateService::DEFAULT_TERMS_GST_ADDED])->assertOk()
+            ->assertJsonPath('data.terms', \App\Services\EstimateService::DEFAULT_TERMS);
+        $this->patchJson("/api/v1/estimates/{$id}", ['prices_include_gst' => false, 'terms' => \App\Services\EstimateService::DEFAULT_TERMS])->assertOk()
+            ->assertJsonPath('data.terms', \App\Services\EstimateService::DEFAULT_TERMS_GST_ADDED);
+
+        // Terms the company wrote itself are never touched.
+        $this->patchJson("/api/v1/estimates/{$id}", ['prices_include_gst' => true, 'terms' => '50% advance.'])->assertOk()
+            ->assertJsonPath('data.terms', '50% advance.');
+    }
+
     public function test_each_line_takes_its_rate_from_settings_unless_changed_and_a_copy_keeps_them(): void
     {
         $customer = $this->makeCustomer($this->tenant, ['state' => 'Kerala']);

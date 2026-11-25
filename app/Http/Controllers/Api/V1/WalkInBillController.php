@@ -27,13 +27,18 @@ class WalkInBillController extends Controller
             'branch_id' => ['nullable', 'integer', $exists('branches')],
             'items' => ['required', 'array', 'min:1', 'max:50'],
             'items.*.type' => ['required', Rule::in(['service', 'part'])],
-            'items.*.item_id' => ['required_if:items.*.type,part', 'nullable', 'integer', $exists('inventory_items')],
-            'items.*.description' => ['nullable', 'string', 'max:200'],
+            // A part is picked from stock (item_id) or typed in by name and price, like on an estimate; a typed part touches no stock.
+            'items.*.item_id' => ['nullable', 'integer', $exists('inventory_items')],
+            'items.*.description' => ['required_without:items.*.item_id', 'nullable', 'string', 'max:200'],
             'items.*.quantity' => ['required', 'numeric', 'gt:0', 'max:100000', 'decimal:0,3'],
-            'items.*.unit_price' => ['required_if:items.*.type,service', 'nullable', 'integer', 'min:0', 'max:100000000'],
+            'items.*.unit_price' => ['required_without:items.*.item_id', 'nullable', 'integer', 'min:0', 'max:100000000'],
+            // The line's own GST rate; empty: the part's rate, else Settings → GST.
+            'items.*.gst_rate' => ['nullable', 'numeric', Rule::in([0, 5, 12, 18, 28])],
             'discount' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'notes' => ['nullable', 'string', 'max:500'],
             'is_gst' => ['nullable', 'boolean'],
+            // True: the prices include GST. False: they are before GST and GST is added on top.
+            'prices_include_gst' => ['nullable', 'boolean'],
             'payment_method' => ['nullable', Rule::in(['cash', 'upi', 'cheque', 'bank_transfer', 'credit'])],
             'amount_paid' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'reference_no' => ['nullable', 'string', 'max:100', Rule::requiredIf(fn () => in_array($request->input('payment_method'), ['cheque', 'bank_transfer'], true) && (int) $request->input('amount_paid') > 0)],
@@ -41,8 +46,8 @@ class WalkInBillController extends Controller
             'customer.name.required_without' => 'Enter the customer’s name, or pick an existing customer.',
             'customer.phone.required_without' => 'Enter the customer’s phone number, or pick an existing customer.',
             'items.required' => 'Add at least one service or part.',
-            'items.*.item_id.required_if' => 'Choose the part.',
-            'items.*.unit_price.required_if' => 'Enter the service charge.',
+            'items.*.description.required_without' => 'Describe the service or part.',
+            'items.*.unit_price.required_without' => 'Enter the price.',
             'reference_no.required' => 'Enter the cheque number or bank reference.',
         ]);
 
