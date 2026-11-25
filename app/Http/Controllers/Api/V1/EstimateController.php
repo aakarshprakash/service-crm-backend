@@ -153,6 +153,7 @@ class EstimateController extends Controller
         return Estimate::query()
             ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
             ->when($request->filled('job_id'), fn ($q) => $q->where('job_id', $request->integer('job_id')))
+            ->gstStyle($request->input('gst'))
             ->when($request->filled('from'), fn ($q) => $q->whereDate('estimate_date', '>=', $request->date('from')))
             ->when($request->filled('to'), fn ($q) => $q->whereDate('estimate_date', '<=', $request->date('to')))
             ->search($request->string('search')->toString());

@@ -33,6 +33,7 @@ class InvoiceController extends Controller
             ->when($request->filled('payment_status'), fn ($q) => $q->whereIn('payment_status', explode(',', $request->string('payment_status'))))
             ->when($request->boolean('credit'), fn ($q) => $q->where('is_credit', true))
             ->when($request->filled('source'), fn ($q) => $q->where('source', $request->string('source')))
+            ->gstStyle($request->input('gst'))
             ->when($request->filled('branch_id'), fn ($q) => $q->where('branch_id', $request->integer('branch_id')))
             ->when($request->filled('technician_id'), fn ($q) => $q->whereHas('job', fn ($j) => $j->where('assigned_technician_id', $request->integer('technician_id'))))
             ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
