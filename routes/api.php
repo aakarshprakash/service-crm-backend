@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
+use App\Http\Controllers\Api\V1\BrandSpareController;
 use App\Http\Controllers\Api\V1\OfficeDayCloseController;
 use App\Http\Controllers\Api\V1\ExpenseClaimController;
 use App\Http\Controllers\Api\V1\ExpenseController;
@@ -235,6 +236,22 @@ Route::prefix('v1')->group(function () {
             Route::post('estimates/{id}/status', [EstimateController::class, 'setStatus'])->whereNumber('id');
             Route::post('estimates/{id}/duplicate', [EstimateController::class, 'duplicate'])->whereNumber('id');
             Route::delete('estimates/{id}', [EstimateController::class, 'destroy'])->whereNumber('id');
+        });
+
+        // Brand spares: parts the brand billed, and returning the warranty ones.
+        Route::middleware('can:spares.view')->group(function () {
+            Route::get('spares', [BrandSpareController::class, 'index']);
+            Route::get('spares/summary', [BrandSpareController::class, 'summary']);
+            Route::get('spares/export', [BrandSpareController::class, 'export'])->middleware('throttle:10,1');
+            Route::get('spares/{id}', [BrandSpareController::class, 'show'])->whereNumber('id');
+        });
+        Route::middleware('can:spares.manage')->group(function () {
+            Route::post('spares', [BrandSpareController::class, 'store']);
+            Route::post('spares/bulk', [BrandSpareController::class, 'bulk']);
+            Route::post('spares/import', [BrandSpareController::class, 'import'])->middleware('throttle:20,1');
+            Route::post('spares/company-pending', [BrandSpareController::class, 'companyPending'])->middleware('throttle:20,1');
+            Route::patch('spares/{id}', [BrandSpareController::class, 'update'])->whereNumber('id');
+            Route::delete('spares/{id}', [BrandSpareController::class, 'destroy'])->whereNumber('id');
         });
 
         // Walk-in (counter) bills, expenses and the mini accounts books.

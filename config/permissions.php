@@ -63,6 +63,10 @@ return [
     'inventory.view' => [...$staff, 'head_engineer', 'store_keeper', 'technician'],
     'inventory.manage' => ['admin', 'accountant', 'store_keeper'],
 
+    // Brand spares: parts the brand bills, and sending the warranty ones back (inspection, RMA, courier).
+    'spares.view' => [...$staff, 'head_engineer', 'store_keeper', 'service_tracker'],
+    'spares.manage' => [...$staff, 'store_keeper', 'service_tracker'],
+
     'invoices.view' => [...$staff, 'head_engineer', 'service_tracker', 'technician'],
     'payments.record' => ['admin', 'accountant'], // office collections against an invoice
     'invoices.change_bill_type' => ['admin', 'accountant'], // GST / non-GST on an existing bill
