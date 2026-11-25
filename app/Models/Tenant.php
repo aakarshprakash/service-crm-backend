@@ -24,11 +24,16 @@ class Tenant extends Model
         'invoice_prefix' => 'INV',
         'job_prefix' => 'SC',
         'receipt_prefix' => 'RCPT',
+        // Non-GST bills in a series of their own (letters below), so GST tax invoices run without gaps.
+        // Off: every bill shares the invoice series, as before.
+        'non_gst_numbering' => false,
+        'non_gst_invoice_prefix' => 'BILL',
         // The rest of each number after its letters. Only job numbers may end in a random number:
         // tax invoices must run in consecutive order, and receipts follow them.
         'numbering' => [
             'job' => ['date' => 'ym', 'ending' => 'counter', 'digits' => 5, 'separator' => 'dash'],
             'invoice' => ['date' => 'ym', 'ending' => 'counter', 'digits' => 5, 'separator' => 'dash'],
+            'non_gst_invoice' => ['date' => 'ym', 'ending' => 'counter', 'digits' => 5, 'separator' => 'dash'],
             'receipt' => ['date' => 'ym', 'ending' => 'counter', 'digits' => 5, 'separator' => 'dash'],
         ],
         'notifications' => ['sms' => false, 'whatsapp' => false, 'push' => true, 'email' => false],
@@ -61,11 +66,12 @@ class Tenant extends Model
         // job_bills / walkin_bills: whether a new bill starts as a GST or non-GST bill. Each bill can still be changed.
         // estimates: how a new estimate starts (gst | non_gst). estimate_prices: whether the rates typed on a GST
         // estimate are before GST, with GST added on top (before_gst), or include it (include_gst).
-        'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst', 'estimates' => 'gst', 'estimate_prices' => 'before_gst'],
+        // walkin_prices: the same choice for counter bills (job bills always include GST).
+        'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst', 'estimates' => 'gst', 'estimate_prices' => 'before_gst', 'walkin_prices' => 'include_gst'],
         // Printed on invoices, for customers paying by bank transfer.
         'bank' => ['account_name' => null, 'bank_name' => null, 'account_no' => null, 'ifsc' => null, 'branch' => null],
         'invoice_template' => 'classic', // classic | modern
-        'estimate_template' => 'modern', // modern | classic-gst | minimal | letterhead
+        'estimate_template' => 'modern', // EstimateService::TEMPLATES: modern | classic
         // Whether the company signature and stamp print by default. Estimates: on; invoices: off. Each estimate can override.
         'signature' => ['estimates' => true, 'invoices' => false],
         // Estimates: letters before the number, how many days one stays valid, and the terms printed on it (null = the standard ones).

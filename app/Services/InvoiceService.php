@@ -25,9 +25,10 @@ class InvoiceService
      * Create or refresh the job's invoice from all closed visits (FR-10.1):
      * Total Service Charge + Total Spare Charge = Total Charge.
      */
-    public function syncForJob(ServiceJob $job): ?Invoice
+    public function syncForJob(ServiceJob $job, ?bool $isGst = null): ?Invoice
     {
-        return DB::transaction(function () use ($job) {
+        // $isGst: the technician's choice for a new bill, so its number comes from the right series straight away.
+        return DB::transaction(function () use ($job, $isGst) {
             $visits = $job->visits()->where('status', '!=', 'in_progress')->get();
             $service = (int) $visits->sum('labour_charge');
             $spare = (int) $visits->sum('spare_charge');
@@ -40,14 +41,15 @@ class InvoiceService
 
             if (! $invoice) {
                 $tenant = Tenant::findOrFail($job->tenant_id);
+                $gst = $isGst === null ? $this->startsAsGst($tenant, 'job_bills') : $isGst && (bool) $tenant->gstin;
                 $invoice = new Invoice([
                     'job_id' => $job->id,
                     'customer_id' => $job->customer_id,
                     'branch_id' => $job->branch_id,
-                    'invoice_number' => DocumentNumber::next($tenant, 'invoice'),
+                    'invoice_number' => DocumentNumber::invoice($tenant, $gst),
                     'pay_token' => Str::random(48),
                     'generated_at' => now(),
-                    'is_gst' => $this->startsAsGst($tenant, 'job_bills'),
+                    'is_gst' => $gst,
                 ]);
             }
 
@@ -66,15 +68,20 @@ class InvoiceService
     }
 
     /**
-     * Snapshot the GST breakup of the invoice (prices are GST-inclusive, so the total is unchanged).
-     * A non-GST bill, or any bill from a company without a GSTIN, is a plain invoice with no tax.
+     * Snapshot the GST breakup of the invoice and set what the customer pays.
+     * GST inclusive (every job bill, and counter bills unless chosen otherwise): the tax is inside the
+     * prices, so the total is the prices less the discount. GST exclusive (counter bills only): the prices
+     * are before GST and the tax is added on top. A non-GST bill, or any bill from a company without a
+     * GSTIN, is a plain invoice with no tax: the customer pays the prices less the discount.
+     * The caller refreshes the paid / balance figures afterwards, as the total can move.
      */
     public function applyGst(Invoice $invoice): void
     {
         $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $typed = (int) $invoice->total_service_charge + (int) $invoice->total_spare_charge - (int) $invoice->discount_amount;
         if (! $tenant->gstin || ! $invoice->is_gst) {
             $invoice->forceFill([
-                'is_gst' => false, 'taxable_amount' => $invoice->total_amount, 'cgst_amount' => 0, 'sgst_amount' => 0,
+                'is_gst' => false, 'total_amount' => $typed, 'taxable_amount' => $typed, 'cgst_amount' => 0, 'sgst_amount' => 0,
                 'igst_amount' => 0, 'place_of_supply' => null, 'customer_gstin' => null, 'gst_breakup' => null,
             ])->save();
 
@@ -86,14 +93,18 @@ class InvoiceService
         $theirs = IndianStates::resolve($customer?->gstin, $customer?->state);
         $interState = $ours && $theirs && $ours !== $theirs;
 
-        $gst = Gst::breakup($this->gstLines($invoice, $tenant), $invoice->discount_amount, $interState);
-        if ($gst['totals']['total'] !== $invoice->total_amount) {
+        // Job bills are collected by technicians at the price they typed, so they always include GST.
+        $inclusive = $invoice->job_id || $invoice->prices_include_gst !== false;
+        $gst = Gst::breakup($this->gstLines($invoice, $tenant), (int) $invoice->discount_amount, $interState, $inclusive);
+        if ($inclusive && $gst['totals']['total'] !== $typed) {
             // By construction this cannot happen; never issue a tax invoice that does not add up.
-            throw new \RuntimeException("GST breakup {$gst['totals']['total']} does not match invoice {$invoice->invoice_number} total {$invoice->total_amount}.");
+            throw new \RuntimeException("GST breakup {$gst['totals']['total']} does not match invoice {$invoice->invoice_number} total {$typed}.");
         }
 
         $invoice->forceFill([
             'is_gst' => true,
+            'prices_include_gst' => $inclusive,
+            'total_amount' => $gst['totals']['total'],
             'taxable_amount' => $gst['totals']['taxable'],
             'cgst_amount' => $gst['totals']['cgst'],
             'sgst_amount' => $gst['totals']['sgst'],
@@ -111,21 +122,32 @@ class InvoiceService
     }
 
     /**
-     * Switches a bill between GST and non-GST. Prices include GST, so what the customer pays
-     * doesn't change: only whether the tax is split out and shown.
+     * Switches a bill between GST and non-GST. With GST-inclusive prices what the customer pays doesn't
+     * change, only whether the tax is split out and shown. With GST-exclusive prices the GST on top comes
+     * or goes, so the balance due moves with it.
      */
     public function changeBillType(Invoice $invoice, bool $isGst): Invoice
     {
-        if ($isGst && ! Tenant::findOrFail($invoice->tenant_id)->gstin) {
+        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        if ($isGst && ! $tenant->gstin) {
             throw ValidationException::withMessages(['is_gst' => 'Add your GSTIN under Settings → Company to issue GST bills.']);
         }
-        $invoice->is_gst = $isGst;
-        $this->applyGst($invoice);
 
-        return $invoice;
+        return DB::transaction(function () use ($invoice, $isGst, $tenant) {
+            // With non-GST bills in a series of their own, a bill that changes kind takes the next number of its new series.
+            $moves = DocumentNumber::invoiceSeries($tenant, (bool) $invoice->is_gst) !== DocumentNumber::invoiceSeries($tenant, $isGst);
+            $invoice->is_gst = $isGst;
+            if ($moves) {
+                $invoice->invoice_number = DocumentNumber::invoice($tenant, $isGst);
+            }
+            $this->applyGst($invoice);
+            $invoice->refreshPaymentTotals();
+
+            return $invoice;
+        });
     }
 
-    /** Invoice lines at their GST-inclusive amounts: a walk-in bill's own items, or a job's visits. */
+    /** Invoice lines at their amounts as typed: a walk-in bill's own items, or a job's visits. */
     private function gstLines(Invoice $invoice, Tenant $tenant): array
     {
         $sac = (string) $tenant->setting('gst.service_sac', '998719');
@@ -134,12 +156,12 @@ class InvoiceService
         $part = fn ($item) => ['hsn' => $item?->hsn_code, 'uom' => $item?->unit_of_measure, 'gst_rate' => $item?->gst_rate !== null ? (float) $item->gst_rate : $partRate];
 
         if (! $invoice->job_id) {
-            return $invoice->items()->with('item')->orderBy('id')->get()->map(fn ($l) => [
-                'type' => $l->type,
-                'description' => $l->description,
-                'qty' => (float) $l->quantity,
-                'gross' => (int) $l->total,
-            ] + ($l->type === 'part' ? $part($l->item) : ['hsn' => $sac, 'gst_rate' => $serviceRate]))->all();
+            // A line's own rate (chosen on the bill) wins over the part's rate and Settings.
+            return $invoice->items()->with('item')->orderBy('id')->get()->map(fn ($l) => array_merge(
+                $l->type === 'part' ? $part($l->item) : ['hsn' => $sac, 'gst_rate' => $serviceRate],
+                ['type' => $l->type, 'description' => $l->description, 'qty' => (float) $l->quantity, 'gross' => (int) $l->total],
+                $l->gst_rate !== null ? ['gst_rate' => (float) $l->gst_rate] : [],
+            ))->all();
         }
 
         $lines = [];

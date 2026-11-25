@@ -15,7 +15,7 @@ class Invoice extends Model
     protected $fillable = [
         'job_id', 'source', 'customer_id', 'branch_id', 'invoice_number', 'total_service_charge', 'total_spare_charge', 'discount_amount',
         'total_amount', 'paid_amount', 'balance_amount', 'payment_status', 'is_credit', 'notes', 'created_by', 'pay_token', 'generated_at',
-        'is_gst', 'taxable_amount', 'cgst_amount', 'sgst_amount', 'igst_amount', 'place_of_supply', 'customer_gstin', 'gst_breakup',
+        'is_gst', 'prices_include_gst', 'taxable_amount', 'cgst_amount', 'sgst_amount', 'igst_amount', 'place_of_supply', 'customer_gstin', 'gst_breakup',
     ];
 
     protected $hidden = ['pay_token'];
@@ -31,6 +31,7 @@ class Invoice extends Model
             'balance_amount' => 'integer',
             'is_credit' => 'boolean',
             'is_gst' => 'boolean',
+            'prices_include_gst' => 'boolean',
             'taxable_amount' => 'integer',
             'cgst_amount' => 'integer',
             'sgst_amount' => 'integer',

@@ -439,7 +439,9 @@ class VisitService
             // The technician picks the bill type when the bill is first made. Once it exists it may
             // already be with the customer, so changing it is for accounts (invoices.change_bill_type).
             $newBill = ! Invoice::where('job_id', $job->id)->exists();
-            $invoice = $this->invoices->syncForJob($job);
+            // The technician's choice goes in when the bill is made, so it is numbered in the right series.
+            $choice = $newBill && $status !== 'cancelled' && isset($data['is_gst']) ? (bool) $data['is_gst'] : null;
+            $invoice = $this->invoices->syncForJob($job, $choice);
             if ($invoice && $newBill && $status !== 'cancelled' && isset($data['is_gst'])) {
                 $invoice = $this->invoices->changeBillType($invoice, (bool) $data['is_gst']);
             }

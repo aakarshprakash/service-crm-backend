@@ -7,8 +7,10 @@ use App\Models\AuditLog;
 use App\Models\NotificationTemplate;
 use App\Models\SubscriptionPlan;
 use App\Services\NotificationService;
+use App\Services\EstimateService;
 use App\Services\InvoiceService;
 use App\Services\TenantMailer;
+use App\Models\Estimate;
 use App\Models\Invoice;
 use App\Rules\Gstin;
 use App\Support\IndianStates;
@@ -18,6 +20,7 @@ use App\Support\TenantContext;
 use DateTimeZone;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 use Illuminate\Support\Str;
@@ -36,10 +39,13 @@ class SettingsController extends Controller
             'company' => $tenant->only(['name', 'slug', 'email', 'phone', 'address', 'state', 'gstin', 'pan', 'timezone', 'currency', 'status', 'trial_ends_at']),
             'states' => array_values(IndianStates::STATES),
             'invoice_templates' => InvoiceService::TEMPLATES,
+            'estimate_templates' => EstimateService::TEMPLATES,
             'has_logo' => (bool) $tenant->logo_path,
             'has_signature' => (bool) $tenant->signature_path,
             'has_stamp' => (bool) $tenant->stamp_path,
             'settings' => $tenant->mergedSettings(),
+            // What each running counter gives next, shown and changed under Settings → Numbering.
+            'next_numbers' => DocumentNumber::nextValues($tenant),
             'plan' => $tenant->plan,
             'features' => collect(SubscriptionPlan::FEATURES)->mapWithKeys(fn ($f) => [$f => $tenant->feature($f)]),
             'gateway' => [
@@ -81,13 +87,20 @@ class SettingsController extends Controller
             'invoice_prefix' => ['sometimes', 'string', 'max:10', 'regex:/^[A-Z0-9]+$/'],
             'job_prefix' => ['sometimes', 'string', 'max:10', 'regex:/^[A-Z0-9]+$/'],
             'receipt_prefix' => ['sometimes', 'string', 'max:10', 'regex:/^[A-Z0-9]+$/'],
+            'non_gst_invoice_prefix' => ['sometimes', 'string', 'max:10', 'regex:/^[A-Z0-9]+$/'],
+            'non_gst_numbering' => ['sometimes', 'boolean'],
             'numbering' => ['sometimes', 'array'],
             'numbering.*.date' => ['sometimes', Rule::in(array_keys(DocumentNumber::DATE_FORMATS))],
-            'numbering.*.digits' => ['sometimes', 'integer', 'min:3', 'max:8'],
+            // 1: no padding, so 18 prints as AJCCP18 and grows to AJCCP100.
+            'numbering.*.digits' => ['sometimes', 'integer', 'min:1', 'max:8'],
             'numbering.*.separator' => ['sometimes', Rule::in(['dash', 'none'])],
             'numbering.job.ending' => ['sometimes', Rule::in(['counter', 'random'])],
             'numbering.invoice.ending' => ['sometimes', Rule::in(['counter'])],
+            'numbering.non_gst_invoice.ending' => ['sometimes', Rule::in(['counter'])],
             'numbering.receipt.ending' => ['sometimes', Rule::in(['counter'])],
+            // Where each running counter goes on from, e.g. a company moving over from another system.
+            'next_numbers' => ['sometimes', 'array'],
+            'next_numbers.*' => ['integer', 'min:1', 'max:99999999'],
             'notifications' => ['sometimes', 'array'],
             'notifications.sms' => ['boolean'],
             'notifications.whatsapp' => ['boolean'],
@@ -124,6 +137,7 @@ class SettingsController extends Controller
             'gst.walkin_bills' => ['sometimes', Rule::in(['gst', 'non_gst'])],
             'gst.estimates' => ['sometimes', Rule::in(['gst', 'non_gst'])],
             'gst.estimate_prices' => ['sometimes', Rule::in(['before_gst', 'include_gst'])],
+            'gst.walkin_prices' => ['sometimes', Rule::in(['before_gst', 'include_gst'])],
             'bank' => ['sometimes', 'array'],
             'bank.account_name' => ['nullable', 'string', 'max:150'],
             'bank.bank_name' => ['nullable', 'string', 'max:100'],
@@ -131,6 +145,7 @@ class SettingsController extends Controller
             'bank.ifsc' => ['nullable', 'string', 'max:20'],
             'bank.branch' => ['nullable', 'string', 'max:100'],
             'invoice_template' => ['sometimes', Rule::in(InvoiceService::TEMPLATES)],
+            'estimate_template' => ['sometimes', Rule::in(EstimateService::TEMPLATES)],
             'estimate_prefix' => ['sometimes', 'string', 'regex:/^[A-Za-z0-9]{1,8}$/'],
             'estimates' => ['sometimes', 'array'],
             'estimates.valid_days' => ['sometimes', 'integer', 'min:1', 'max:365'],
@@ -161,7 +176,22 @@ class SettingsController extends Controller
         if ($tenant->gstin && $invoiceLength > DocumentNumber::GST_INVOICE_MAX_LENGTH) {
             throw ValidationException::withMessages(['numbering.invoice' => "GST invoice numbers can be at most ".DocumentNumber::GST_INVOICE_MAX_LENGTH." characters. This format makes {$invoiceLength}."]);
         }
-        $tenant->update(['settings' => $merged]);
+        if ($merged['non_gst_numbering'] && $merged['non_gst_invoice_prefix'] === $merged['invoice_prefix']) {
+            throw ValidationException::withMessages(['non_gst_invoice_prefix' => 'Use different letters for non-GST bills, so they can’t be mistaken for GST invoices.']);
+        }
+        $next = array_intersect_key($data['next_numbers'] ?? [], array_flip(DocumentNumber::TYPES));
+        unset($merged['next_numbers']);
+
+        DB::transaction(function () use ($tenant, $merged, $next) {
+            $tenant->update(['settings' => $merged]);
+            $current = DocumentNumber::nextValues($tenant);
+            foreach ($next as $type => $value) {
+                // Only a number someone changed: an unchanged one must not wind back numbers issued meanwhile.
+                if ((int) $value !== $current[$type]) {
+                    DocumentNumber::setNext($tenant, $type, (int) $value);
+                }
+            }
+        });
 
         return $this->ok($tenant->mergedSettings(), 'Settings saved.');
     }
@@ -298,6 +328,16 @@ class SettingsController extends Controller
         abort_unless($invoice, 404, 'Create an invoice first to preview the designs.');
 
         return $invoices->pdf($invoice, $template)->stream("preview-{$template}.pdf");
+    }
+
+    /** An estimate design shown with the latest estimate, before choosing it. */
+    public function estimatePreview(Request $request, EstimateService $estimates): Response
+    {
+        $template = $request->validate(['template' => ['required', Rule::in(EstimateService::TEMPLATES)]])['template'];
+        $estimate = Estimate::latest('id')->first();
+        abort_unless($estimate, 404, 'Create an estimate first to preview the designs.');
+
+        return $estimates->pdf($estimate, $template)->stream("estimate-preview-{$template}.pdf");
     }
 
     public function uploadLogo(Request $request): JsonResponse

@@ -95,6 +95,7 @@ class MasterDataController extends Controller
                 'part_rate' => (float) $tenant->setting('gst.part_rate', 18),
                 'estimates' => $tenant->setting('gst.estimates'),
                 'estimate_prices' => $tenant->setting('gst.estimate_prices'),
+                'walkin_prices' => $tenant->setting('gst.walkin_prices'),
             ],
             // The company signature and stamp: whether they are uploaded, and whether a new estimate shows them by default.
             'signature' => [

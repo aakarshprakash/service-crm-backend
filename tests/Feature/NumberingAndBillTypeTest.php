@@ -241,4 +241,132 @@ class NumberingAndBillTypeTest extends TestCase
             }
         }
     }
+
+    public function test_counter_bill_with_gst_exclusive_prices_adds_gst_on_top(): void
+    {
+        $this->registerForGst();
+        // ₹1,180 at 18% with ₹100 off: taxable 1,080, GST 194.40 (97.20 + 97.20), total 1,274.40.
+        $bill = $this->walkIn(['discount' => 10000, 'prices_include_gst' => false, 'payment_method' => 'cash', 'amount_paid' => 50000]);
+
+        $this->assertFalse($bill['prices_include_gst']);
+        $this->assertSame(108000, $bill['taxable_amount']);
+        $this->assertSame(9720, $bill['cgst_amount']);
+        $this->assertSame(9720, $bill['sgst_amount']);
+        $this->assertSame(127440, $bill['total_amount']);
+        $this->assertSame(77440, $bill['balance_amount']);
+        $this->assertSame('partial', $bill['payment_status']);
+
+        foreach (['classic', 'modern'] as $design) {
+            $this->putJson('/api/v1/settings/preferences', ['invoice_template' => $design])->assertOk();
+            $this->get("/api/v1/invoices/{$bill['id']}/pdf")->assertOk();
+        }
+    }
+
+    public function test_counter_bills_follow_the_gst_style_set_in_settings(): void
+    {
+        $this->registerForGst();
+        // Out of the box prices include GST, as before.
+        $inclusive = $this->walkIn();
+        $this->assertTrue($inclusive['prices_include_gst']);
+        $this->assertSame(118000, $inclusive['total_amount']);
+
+        $this->putJson('/api/v1/settings/preferences', ['gst' => ['walkin_prices' => 'before_gst']])->assertOk()
+            ->assertJsonPath('data.gst.walkin_prices', 'before_gst');
+        $exclusive = $this->walkIn();
+        $this->assertFalse($exclusive['prices_include_gst']);
+        $this->assertSame(139240, $exclusive['total_amount']); // 1,180 + 18%
+
+        // The person billing can still choose, and a bad value is refused.
+        $this->assertTrue($this->walkIn(['prices_include_gst' => true])['prices_include_gst']);
+        $this->putJson('/api/v1/settings/preferences', ['gst' => ['walkin_prices' => 'sometimes']])->assertStatus(422);
+    }
+
+    public function test_switching_an_exclusive_bill_to_non_gst_and_back_moves_the_total(): void
+    {
+        $this->registerForGst();
+        $bill = $this->walkIn(['prices_include_gst' => false, 'payment_method' => 'cash', 'amount_paid' => 118000]);
+        $this->assertSame(139240, $bill['total_amount']);
+
+        // No GST: the customer pays the typed price, so the ₹1,180 already paid settles it.
+        $this->postJson("/api/v1/invoices/{$bill['id']}/bill-type", ['is_gst' => false])->assertOk()
+            ->assertJsonPath('data.total_amount', 118000)->assertJsonPath('data.balance_amount', 0)->assertJsonPath('data.payment_status', 'paid');
+
+        $this->postJson("/api/v1/invoices/{$bill['id']}/bill-type", ['is_gst' => true])->assertOk()
+            ->assertJsonPath('data.total_amount', 139240)->assertJsonPath('data.balance_amount', 21240)->assertJsonPath('data.payment_status', 'partial');
+    }
+
+    public function test_invoices_can_start_from_a_chosen_number_without_padding(): void
+    {
+        $this->putJson('/api/v1/settings/preferences', [
+            'invoice_prefix' => 'AJCCP',
+            'numbering' => ['invoice' => ['date' => 'none', 'separator' => 'none', 'digits' => 1]],
+            'next_numbers' => ['invoice' => 18],
+        ])->assertOk();
+
+        $this->assertSame('AJCCP18', $this->walkIn()['invoice_number']);
+        $this->assertSame('AJCCP19', $this->walkIn()['invoice_number']);
+        $this->getJson('/api/v1/settings')->assertOk()->assertJsonPath('data.next_numbers.invoice', 20);
+
+        $this->putJson('/api/v1/settings/preferences', ['next_numbers' => ['invoice' => 0]])->assertStatus(422);
+    }
+
+    public function test_non_gst_bills_can_run_in_their_own_series(): void
+    {
+        $this->registerForGst();
+        $format = ['date' => 'none', 'separator' => 'dash', 'digits' => 3];
+        $this->putJson('/api/v1/settings/preferences', [
+            'invoice_prefix' => 'TAX', 'non_gst_invoice_prefix' => 'BOS', 'non_gst_numbering' => true,
+            'numbering' => ['invoice' => $format, 'non_gst_invoice' => $format],
+        ])->assertOk();
+
+        $this->assertSame('TAX-001', $this->walkIn()['invoice_number']);
+        $plain = $this->walkIn(['is_gst' => false]);
+        $this->assertSame('BOS-001', $plain['invoice_number']);
+
+        // A job bill made as non-GST takes a non-GST number: no GST number is used up.
+        $this->putJson('/api/v1/settings/preferences', ['gst' => ['job_bills' => 'non_gst']])->assertOk();
+        $this->assertSame('BOS-002', $this->jobInvoice()->invoice_number);
+        $this->assertSame('TAX-002', $this->walkIn()['invoice_number']);
+
+        // Switching a bill to GST moves it into the GST series.
+        $this->postJson("/api/v1/invoices/{$plain['id']}/bill-type", ['is_gst' => true])->assertOk()
+            ->assertJsonPath('data.invoice_number', 'TAX-003');
+
+        // The two series can't share letters, or their numbers would look alike.
+        $this->putJson('/api/v1/settings/preferences', ['non_gst_invoice_prefix' => 'TAX'])
+            ->assertStatus(422)->assertJsonValidationErrors('non_gst_invoice_prefix');
+    }
+
+    public function test_counter_bill_lines_can_carry_their_own_gst_rate(): void
+    {
+        $this->registerForGst();
+        $lines = [
+            ['type' => 'service', 'description' => 'Gas top-up', 'quantity' => 1, 'unit_price' => 100000, 'gst_rate' => 5],
+            ['type' => 'service', 'description' => 'Check-up', 'quantity' => 1, 'unit_price' => 100000],
+        ];
+        $bill = $this->postJson('/api/v1/walk-in-bills', [
+            'customer' => ['name' => 'Asha', 'phone' => '9811100055'], 'prices_include_gst' => false, 'items' => $lines,
+        ])->assertCreated()->json('data');
+
+        // ₹1,000 at its own 5% + ₹1,000 at the Settings rate of 18%.
+        $this->assertSame(223000, $bill['total_amount']);
+        $this->assertSame([5.0, 18.0], array_map('floatval', array_column($bill['gst_breakup']['lines'], 'gst_rate')));
+        $this->assertEquals(5, $bill['items'][0]['gst_rate']);
+        $this->assertNull($bill['items'][1]['gst_rate']);
+
+        $lines[0]['gst_rate'] = 7;
+        $this->postJson('/api/v1/walk-in-bills', ['customer' => ['name' => 'Asha', 'phone' => '9811100055'], 'items' => $lines])
+            ->assertStatus(422)->assertJsonValidationErrors('items.0.gst_rate');
+    }
+
+    public function test_job_bills_stay_gst_inclusive_whatever_the_counter_setting(): void
+    {
+        $this->registerForGst();
+        $this->putJson('/api/v1/settings/preferences', ['gst' => ['walkin_prices' => 'before_gst']])->assertOk();
+
+        $invoice = $this->jobInvoice();
+        $this->assertTrue($invoice->prices_include_gst);
+        $this->assertSame(118000, $invoice->total_amount);
+        $this->assertSame(100000, $invoice->taxable_amount);
+    }
 }

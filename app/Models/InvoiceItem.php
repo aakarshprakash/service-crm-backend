@@ -11,12 +11,14 @@ class InvoiceItem extends Model
 {
     use BelongsToTenant;
 
-    protected $fillable = ['invoice_id', 'type', 'item_id', 'description', 'quantity', 'unit_price', 'total'];
+    protected $fillable = ['invoice_id', 'type', 'item_id', 'description', 'quantity', 'unit_price', 'gst_rate', 'total'];
 
     protected function casts(): array
     {
         return [
             'quantity' => 'float',
+            // Null: the part's own rate, else Settings → GST.
+            'gst_rate' => 'float',
             'unit_price' => 'integer',
             'total' => 'integer',
         ];

@@ -73,6 +73,28 @@ class WalkInAndBooksTest extends TestCase
             ->assertJsonPath('data.customer_id', $res->json('data.customer_id'));
     }
 
+    public function test_a_part_not_kept_in_stock_can_be_typed_in(): void
+    {
+        $bill = $this->bill([
+            'items' => [
+                ['type' => 'part', 'description' => 'Copper pipe 1/4 inch (bought locally)', 'quantity' => 2, 'unit_price' => 35000],
+                ['type' => 'part', 'item_id' => $this->part->id, 'quantity' => 1],
+            ],
+            'discount' => null, 'amount_paid' => 120000,
+        ])->assertCreated()
+            ->assertJsonPath('data.total_spare_charge', 120000)
+            ->assertJsonPath('data.items.0.item_id', null)
+            ->assertJsonPath('data.items.0.description', 'Copper pipe 1/4 inch (bought locally)')
+            ->json('data');
+
+        $this->assertSame(120000, $bill['total_amount']);
+        $this->assertSame(9.0, $this->stock()); // only the stocked part is taken out
+
+        // A typed part needs its name and price.
+        $this->bill(['items' => [['type' => 'part', 'quantity' => 1]]])
+            ->assertStatus(422)->assertJsonValidationErrors(['items.0.description', 'items.0.unit_price']);
+    }
+
     public function test_rejected_payment_or_short_stock_leaves_nothing_behind(): void
     {
         // Cheque needs its number; a UPI reference is optional.

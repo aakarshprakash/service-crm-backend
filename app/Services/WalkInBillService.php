@@ -40,21 +40,22 @@ class WalkInBillService
             $parts = 0;
             foreach ($data['items'] as $i => $line) {
                 $qty = round((float) $line['quantity'], 3);
-                if ($line['type'] === 'part') {
+                if ($line['type'] === 'part' && ! empty($line['item_id'])) {
                     $item = InventoryItem::findOrFail($line['item_id']);
                     $price = (int) ($line['unit_price'] ?? $item->unit_price);
                     $description = trim($line['description'] ?? '') ?: "{$item->name} ({$item->code})";
                 } else {
+                    // A service, or a part typed in by name (not kept in stock, so nothing is taken out).
                     $item = null;
                     $price = (int) ($line['unit_price'] ?? 0);
                     $description = trim($line['description'] ?? '');
                     if ($description === '') {
-                        throw ValidationException::withMessages(["items.$i.description" => 'Describe the service.']);
+                        throw ValidationException::withMessages(["items.$i.description" => $line['type'] === 'part' ? 'Enter the part name.' : 'Describe the service.']);
                     }
                 }
                 $total = (int) round($qty * $price);
                 $line['type'] === 'part' ? $parts += $total : $service += $total;
-                $lines[] = compact('item', 'qty', 'price', 'description', 'total') + ['type' => $line['type']];
+                $lines[] = compact('item', 'qty', 'price', 'description', 'total') + ['type' => $line['type'], 'gst_rate' => $line['gst_rate'] ?? null];
             }
 
             $discount = (int) ($data['discount'] ?? 0);
@@ -70,13 +71,17 @@ class WalkInBillService
                 throw ValidationException::withMessages(['is_gst' => 'Add your GSTIN under Settings → Company to issue GST bills.']);
             }
 
+            // GST inclusive or exclusive: as chosen on the bill, else Settings → GST (inclusive unless changed).
+            $pricesIncludeGst = $data['prices_include_gst'] ?? $tenant->setting('gst.walkin_prices', 'include_gst') !== 'before_gst';
+
             $invoice = Invoice::create([
                 'job_id' => null,
                 'source' => 'walk_in',
                 'customer_id' => $customer->id,
                 'branch_id' => $branchId,
-                'invoice_number' => DocumentNumber::next($tenant, 'invoice'),
+                'invoice_number' => DocumentNumber::invoice($tenant, (bool) $isGst),
                 'is_gst' => $isGst,
+                'prices_include_gst' => (bool) $pricesIncludeGst,
                 'total_service_charge' => $service,
                 'total_spare_charge' => $parts,
                 'discount_amount' => $discount,
@@ -91,7 +96,7 @@ class WalkInBillService
             foreach ($lines as $l) {
                 InvoiceItem::create([
                     'invoice_id' => $invoice->id, 'type' => $l['type'], 'item_id' => $l['item']?->id,
-                    'description' => mb_substr($l['description'], 0, 200), 'quantity' => $l['qty'], 'unit_price' => $l['price'], 'total' => $l['total'],
+                    'description' => mb_substr($l['description'], 0, 200), 'quantity' => $l['qty'], 'unit_price' => $l['price'], 'gst_rate' => $l['gst_rate'], 'total' => $l['total'],
                 ]);
                 if ($l['item']) {
                     $this->inventory->sellForInvoice($invoice->id, $l['item'], $branchId, $l['qty'], $by->id);
