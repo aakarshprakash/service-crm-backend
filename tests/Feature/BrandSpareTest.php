@@ -248,7 +248,12 @@ class BrandSpareTest extends TestCase
             ->assertJsonPath('data.by_class.charged.count', 1)
             ->assertJsonPath('data.by_class.out_of_warranty.count', 1)
             ->assertJsonPath('data.mismatch.count', 1)
+            ->assertJsonPath('data.rma_missing.count', 1)
             ->assertJsonPath('data.couriers.0', 'SPEED AND SAFE');
+
+        // Step 2 lists inspected parts without an RMA / challan; step 3 the ones with it.
+        $this->getJson('/api/v1/spares?status=pending_dispatch&rma=missing')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.material_code', 'GSTEST0004');
+        $this->getJson('/api/v1/spares?status=pending_dispatch&rma=added')->assertOk()->assertJsonCount(0, 'data');
 
         $this->getJson('/api/v1/spares?attention=mismatch')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.material_code', 'GSTEST0001');
         $this->getJson('/api/v1/spares?path=ow')->assertOk()->assertJsonCount(2, 'data');

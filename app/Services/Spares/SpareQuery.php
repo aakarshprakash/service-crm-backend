@@ -12,11 +12,12 @@ use Illuminate\Database\Eloquent\Builder;
 class SpareQuery
 {
     /** The filter names a request may carry. */
-    public const KEYS = ['status', 'group', 'path', 'coverage', 'attention', 'search', 'from', 'to', 'ticket'];
+    public const KEYS = ['status', 'group', 'path', 'coverage', 'attention', 'search', 'from', 'to', 'ticket', 'rma'];
 
     /**
      * @param  array<string, mixed>  $f  status (one or comma separated), group (pending|done), path (warranty|ow),
-     *                                  coverage, attention (mismatch|company_pending), search, from, to, ticket
+     *                                  coverage, attention (mismatch|company_pending), search, from, to, ticket,
+     *                                  rma (missing|added: whether the RMA / challan number is in)
      */
     public static function apply(array $f, bool $withStatus = true): Builder
     {
@@ -39,6 +40,8 @@ class SpareQuery
             ->when(! empty($f['from']), fn ($q) => $q->whereDate('billing_date', '>=', $f['from']))
             ->when(! empty($f['to']), fn ($q) => $q->whereDate('billing_date', '<=', $f['to']))
             ->when(! empty($f['ticket']), fn ($q) => $q->where('ticket_no', $f['ticket']))
+            ->when(($f['rma'] ?? null) === 'missing', fn ($q) => $q->whereNull('rma_no'))
+            ->when(($f['rma'] ?? null) === 'added', fn ($q) => $q->whereNotNull('rma_no'))
             ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w
                 ->where('billing_doc', 'like', $like)->orWhere('material_code', 'like', $like)->orWhere('description', 'like', $like)
                 ->orWhere('ticket_no', 'like', $like)->orWhere('customer_name', 'like', $like)->orWhere('inspection_no', 'like', $like)
@@ -59,6 +62,7 @@ class SpareQuery
             "{$prefix}from" => ['nullable', 'date'],
             "{$prefix}to" => ['nullable', 'date'],
             "{$prefix}ticket" => ['nullable', 'string', 'max:40'],
+            "{$prefix}rma" => ['nullable', 'in:missing,added'],
         ];
     }
 }

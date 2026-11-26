@@ -52,6 +52,8 @@ class BrandSpareController extends Controller
             ->groupBy('k')->get()->keyBy('k');
         $mismatch = $scope()->where('company_pending', true)->where('status', 'pending_return')->selectRaw('COUNT(*) as n, COALESCE(SUM(value), 0) as total')->first();
         $total = $scope()->selectRaw('COUNT(*) as n, COALESCE(SUM(value), 0) as total')->first();
+        // Inspected parts still without an RMA / challan: step 2 (Inspection & RMA); the rest of pending_dispatch is step 3.
+        $rmaMissing = $scope()->where('status', 'pending_dispatch')->whereNull('rma_no')->selectRaw('COUNT(*) as n, COALESCE(SUM(value), 0) as total')->first();
 
         $byStatus = collect(BrandSpare::STATUSES)->mapWithKeys(fn ($s) => [$s => $pair($statuses[$s] ?? null)]);
         $sum = fn (array $keys) => [
@@ -66,6 +68,7 @@ class BrandSpareController extends Controller
             'by_status' => $byStatus,
             'by_class' => collect(['warranty', 'out_of_warranty', 'charged', 'stock', 'none'])->mapWithKeys(fn ($k) => [$k => $pair($classes[$k] ?? null)]),
             'mismatch' => $pair($mismatch),
+            'rma_missing' => $pair($rmaMissing),
             'company_checked_on' => BrandSpare::max('company_checked_on'),
             'last_billing_date' => BrandSpare::max('billing_date'),
             'couriers' => BrandSpare::whereNotNull('courier')->groupBy('courier')->orderByRaw('COUNT(*) DESC')->limit(8)->pluck('courier'),
