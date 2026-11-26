@@ -4,6 +4,8 @@ use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
 use App\Http\Controllers\Api\V1\BrandSpareController;
+use App\Http\Controllers\Api\V1\SpareBulkController;
+use App\Http\Controllers\Api\V1\SpareFileController;
 use App\Http\Controllers\Api\V1\OfficeDayCloseController;
 use App\Http\Controllers\Api\V1\ExpenseClaimController;
 use App\Http\Controllers\Api\V1\ExpenseController;
@@ -238,18 +240,22 @@ Route::prefix('v1')->group(function () {
             Route::delete('estimates/{id}', [EstimateController::class, 'destroy'])->whereNumber('id');
         });
 
-        // Brand spares: parts the brand billed, and returning the warranty ones.
+        // SAPRE spare parts: parts the brand billed, returning the warranty ones, OW billing.
         Route::middleware('can:spares.view')->group(function () {
             Route::get('spares', [BrandSpareController::class, 'index']);
             Route::get('spares/summary', [BrandSpareController::class, 'summary']);
-            Route::get('spares/export', [BrandSpareController::class, 'export'])->middleware('throttle:10,1');
+            Route::get('spares/recent', [BrandSpareController::class, 'recent']);
+            Route::get('spares/export', [SpareFileController::class, 'export'])->middleware('throttle:10,1');
+            Route::get('spares/template', [SpareFileController::class, 'template'])->middleware('throttle:10,1');
+            Route::get('spares/imports', [SpareFileController::class, 'history']);
             Route::get('spares/{id}', [BrandSpareController::class, 'show'])->whereNumber('id');
+            Route::get('spares/{id}/activity', [BrandSpareController::class, 'activity'])->whereNumber('id');
         });
         Route::middleware('can:spares.manage')->group(function () {
             Route::post('spares', [BrandSpareController::class, 'store']);
-            Route::post('spares/bulk', [BrandSpareController::class, 'bulk']);
-            Route::post('spares/import', [BrandSpareController::class, 'import'])->middleware('throttle:20,1');
-            Route::post('spares/company-pending', [BrandSpareController::class, 'companyPending'])->middleware('throttle:20,1');
+            Route::post('spares/bulk', SpareBulkController::class);
+            Route::post('spares/import', [SpareFileController::class, 'import'])->middleware('throttle:20,1');
+            Route::post('spares/company-pending', [SpareFileController::class, 'companyPending'])->middleware('throttle:20,1');
             Route::patch('spares/{id}', [BrandSpareController::class, 'update'])->whereNumber('id');
             Route::delete('spares/{id}', [BrandSpareController::class, 'destroy'])->whereNumber('id');
         });
