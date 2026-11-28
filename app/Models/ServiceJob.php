@@ -195,15 +195,23 @@ class ServiceJob extends Model
         if (! $term = trim((string) $term)) {
             return $query;
         }
-        $like = '%'.str_replace(['%', '_'], ['\%', '\_'], $term).'%';
+        $escape = fn (string $s) => '%'.str_replace(['%', '_'], ['\%', '\_'], $s).'%';
+        $like = $escape($term);
+        // CRM numbers are typed with or without their dashes, spaces and slashes ("SC261100069", "sc 2611 69"):
+        // compare them with those taken out on both sides, so any part of the number finds the job.
+        $compact = preg_replace('/[\s\-\/._]+/', '', $term);
+        $bare = fn (string $column) => "REPLACE(REPLACE(REPLACE(REPLACE({$column}, '-', ''), ' ', ''), '/', ''), '.', '') LIKE ?";
 
-        return $query->where(function (Builder $q) use ($like, $term) {
+        return $query->where(function (Builder $q) use ($like, $compact, $escape, $bare) {
             $q->where('crm_call_id', 'like', $like)
+                ->when($compact !== '', fn ($w) => $w->orWhereRaw($bare('crm_call_id'), [$escape($compact)]))
                 ->orWhere('product_category', 'like', $like)
                 ->orWhere('customer_satisfaction_code', 'like', $like)
                 ->orWhereHas('customer', fn ($c) => $c->where('phone', 'like', $like)
                     ->orWhere('alt_phone', 'like', $like)
-                    ->orWhere('crm_id', $term)
+                    // The customer's CRM ID: any part of it, with or without separators.
+                    ->orWhere('crm_id', 'like', $like)
+                    ->when($compact !== '', fn ($w) => $w->orWhereRaw($bare('crm_id'), [$escape($compact)]))
                     ->orWhere('name', 'like', $like))
                 ->orWhereHas('customerProduct', fn ($p) => $p->where('serial_no', 'like', $like)
                     ->orWhere('outdoor_serial_no', 'like', $like)
