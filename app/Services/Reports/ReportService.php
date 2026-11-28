@@ -38,6 +38,7 @@ class ReportService
     public const REPORTS = [
         'jobs' => ['Job Report', 'reports.view', 'Jobs by status, technician, branch, complaint type and priority.'],
         'technician-performance' => ['Technician Performance', 'reports.view', 'Jobs completed, visit duration, ratings and cash handling per technician.'],
+        'technician-jobs' => ['Technician Job Report (with location)', 'reports.view', 'Each technician’s visits with the customer’s area and address, where each visit was started and finished on the map, and how far that was from the customer.'],
         'revenue' => ['Revenue Report', 'reports.financial', 'Collected vs pending, split by payment method.'],
         'cash-collection' => ['Daily Cash Collection', 'reports.financial', 'Offline collections per technician per day by method.'],
         'cash-close' => ['Daily Cash Close', 'reports.financial', 'Submitted / verified closes with discrepancies highlighted.'],
@@ -478,6 +479,90 @@ class ReportService
             'Pending' => (int) ($summary['pending'] ?? 0), 'Part pending' => (int) ($summary['part_pending'] ?? 0), 'Cancellation requested' => (int) ($summary['cancel_requested'] ?? 0), 'Completed' => (int) ($summary['completed'] ?? 0),
             'Cancelled' => (int) ($summary['cancelled'] ?? 0),
         ]);
+    }
+
+    /** Visits started further than this from the customer's saved location are highlighted. */
+    private const AWAY_METRES = 300;
+
+    /**
+     * Technician-wise visits with locations: the customer's area and address, the GPS where the technician started
+     * and finished the visit, and how far the start was from the customer's saved location.
+     */
+    private function technicianJobs(?int $limit): ReportResult
+    {
+        $q = JobVisit::query()
+            ->join('service_jobs as j', 'j.id', '=', 'job_visits.job_id')
+            ->leftJoin('customers as c', 'c.id', '=', 'j.customer_id')
+            ->leftJoin('users as t', 't.id', '=', 'job_visits.technician_id')
+            ->leftJoin('service_locations as sl', 'sl.id', '=', 'j.service_location_id')
+            ->tap(fn ($q) => $this->dateRange($q, 'job_visits.start_time'))
+            ->when($this->f('technician_id'), fn ($q, $v) => $q->where('job_visits.technician_id', $v))
+            ->when($this->f('branch_id'), fn ($q, $v) => $q->where('j.branch_id', $v))
+            ->orderBy('t.name')->orderBy('job_visits.start_time')->orderBy('job_visits.id');
+
+        $visits = $q->limit($limit ?? PHP_INT_MAX)->get([
+            't.name as technician', 'job_visits.start_time', 'job_visits.end_time', 'job_visits.duration_seconds', 'job_visits.service_type',
+            'job_visits.status as visit_status', 'job_visits.location_lat', 'job_visits.location_lng', 'job_visits.end_lat', 'job_visits.end_lng',
+            'j.crm_call_id', 'j.status as job_status', 'c.name as customer', 'c.phone', 'c.address', 'c.city', 'c.pincode', 'c.lat as customer_lat',
+            'c.lng as customer_lng', 'sl.name as area',
+        ]);
+
+        $gps = fn ($lat, $lng) => $lat !== null && $lng !== null ? sprintf('%.6f, %.6f', $lat, $lng) : null;
+        $away = 0;
+        $noGps = 0;
+        $rows = $visits->map(function ($v) use ($gps, &$away, &$noGps) {
+            $onSite = $v->service_type !== 'tele_call';
+            $distance = $onSite && $v->location_lat !== null && $v->customer_lat !== null
+                ? (int) round(self::metresBetween((float) $v->location_lat, (float) $v->location_lng, (float) $v->customer_lat, (float) $v->customer_lng))
+                : null;
+            $flag = $distance !== null && $distance > self::AWAY_METRES;
+            $away += $flag ? 1 : 0;
+            $noGps += $onSite && $v->location_lat === null ? 1 : 0;
+
+            return [
+                'technician' => $v->technician,
+                'start' => $this->local($v->start_time),
+                'end' => $this->local($v->end_time, 'H:i'),
+                'minutes' => $v->duration_seconds ? (int) round($v->duration_seconds / 60) : null,
+                'call_id' => $v->crm_call_id,
+                'customer' => $v->customer,
+                'phone' => $v->phone,
+                'area' => $v->area,
+                'address' => trim(implode(', ', array_filter([$v->address, $v->city, $v->pincode]))) ?: null,
+                'visit' => $onSite ? 'On site' : 'Phone call',
+                'visit_status' => str_replace('_', ' ', (string) $v->visit_status),
+                'job_status' => str_replace('_', ' ', is_object($v->job_status) ? $v->job_status->value : (string) $v->job_status),
+                'start_gps' => $onSite ? $gps($v->location_lat, $v->location_lng) : null,
+                'distance' => $distance,
+                'end_gps' => $onSite ? $gps($v->end_lat, $v->end_lng) : null,
+                'customer_gps' => $gps($v->customer_lat, $v->customer_lng),
+                '_flag' => $flag,
+            ];
+        });
+
+        return new ReportResult([
+            'technician' => ['Technician'], 'start' => ['Started', 'datetime'], 'end' => ['Finished'], 'minutes' => ['Minutes', 'number'],
+            'call_id' => ['Call ID'], 'customer' => ['Customer'], 'area' => ['Area'], 'address' => ['Address'],
+            'start_gps' => ['Started at (map)', 'location'], 'distance' => ['From customer (m)', 'number'], 'end_gps' => ['Finished at (map)', 'location'],
+            'customer_gps' => ['Customer location (map)', 'location'],
+            'phone' => ['Phone'], 'visit' => ['Visit'], 'visit_status' => ['Visit result'], 'job_status' => ['Job status'],
+        ], $rows->all(), [
+            'Visits' => $rows->count(),
+            'Technicians' => $rows->pluck('technician')->filter()->unique()->count(),
+            'Started over '.self::AWAY_METRES.' m from the customer' => $away,
+            'On-site visits without GPS' => $noGps,
+        ]);
+    }
+
+    /** Distance between two points on the earth in metres (haversine). */
+    private static function metresBetween(float $lat1, float $lng1, float $lat2, float $lng2): float
+    {
+        $r = 6371000;
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLng = deg2rad($lng2 - $lng1);
+        $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLng / 2) ** 2;
+
+        return 2 * $r * asin(min(1, sqrt($a)));
     }
 
     private function technicianPerformance(?int $limit): ReportResult
