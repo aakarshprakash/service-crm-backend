@@ -298,7 +298,11 @@ class CashCloseService
     {
         $close->total_deposited = (int) $close->deposits()->sum('amount');
         $close->closing_balance = $close->expected_in_hand + $close->discrepancy_amount - $close->total_deposited;
-        if ($close->status === 'verified' && $close->closing_balance <= 0) {
+        // Settled: nothing left to take in, or a later close already carries the balance (it is taken in there).
+        $carried = CashClose::where('technician_id', $close->technician_id)->where('id', '!=', $close->id)
+            ->where(fn ($q) => $q->where('close_date', '>', $close->close_date)->orWhere(fn ($w) => $w->where('close_date', $close->close_date)->where('id', '>', $close->id)))
+            ->exists();
+        if ($close->status === 'verified' && ($close->closing_balance <= 0 || $carried)) {
             $close->status = 'closed';
         }
         $close->save();

@@ -108,6 +108,9 @@ class OfficeDayCloseTest extends TestCase
         // The office's own cash is what the drawer should hold, not the book with technicians' cash in it again.
         $this->assertSame(74000, $balances['cash']);
 
+        // The handover list says which close holds the technician's cash, so it is taken in there.
+        $this->getJson('/api/v1/accounts/cash-close')->assertOk()->assertJsonPath('data.0.is_latest', true)->assertJsonPath('data.0.latest_close_date', $this->today());
+
         $tb = $this->getJson('/api/v1/books/accounts')->assertOk()->json('data');
         $this->assertSame($tb['totals']['closing_dr'], $tb['totals']['closing_cr']);
         $this->assertSame(111500, collect($tb['accounts'])->firstWhere('code', 'cash')['closing']);

@@ -62,7 +62,16 @@ class CashCloseController extends Controller
             ->orderByDesc('close_date')->orderByDesc('id')
             ->paginate($this->perPage($request));
 
-        return $this->paginated($closes);
+        // Cash is taken in against a technician's latest close only (it carries everything before it), so each row
+        // says whether it is the latest and, if not, which later day holds its cash.
+        $latest = CashClose::query()->whereIn('technician_id', collect($closes->items())->pluck('technician_id')->unique())
+            ->orderByDesc('close_date')->orderByDesc('id')->get(['id', 'technician_id', 'close_date'])
+            ->unique('technician_id')->keyBy('technician_id');
+
+        return $this->paginated($closes, fn (CashClose $c) => $c->toArray() + [
+            'is_latest' => ($latest[$c->technician_id]->id ?? null) === $c->id,
+            'latest_close_date' => $latest[$c->technician_id]?->close_date?->toDateString(),
+        ]);
     }
 
     public function show(Request $request, int $id): JsonResponse

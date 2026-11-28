@@ -134,6 +134,30 @@ class CashCloseTest extends TestCase
         Carbon::setTestNow();
     }
 
+    public function test_an_older_day_checked_after_the_later_one_is_settled_by_it(): void
+    {
+        // Two days handed over, neither checked yet: the second carries the first day's cash.
+        Carbon::setTestNow(now()->subDay());
+        $this->collect(30000, 'cash', 30000);
+        $older = $this->actingAsUser($this->tech)->postJson('/api/v1/accounts/cash-close', ['date' => $this->today(), 'amount_confirmed' => 30000])->json('data.id');
+        Carbon::setTestNow();
+        $this->collect(50000, 'cash', 50000);
+        $later = $this->actingAsUser($this->tech)->postJson('/api/v1/accounts/cash-close', ['date' => $this->today(), 'amount_confirmed' => 80000])
+            ->assertJsonPath('data.opening_balance', 30000)->json('data.id');
+
+        $this->actingAsUser($this->accountant);
+        $rows = collect($this->getJson('/api/v1/accounts/cash-close?status=submitted')->json('data'))->keyBy('id');
+        $this->assertFalse($rows[$older]['is_latest']);
+        $this->assertTrue($rows[$later]['is_latest']);
+
+        // The later day is checked and its cash (both days) taken in.
+        $this->patchJson("/api/v1/accounts/cash-close/{$later}/verify", ['amount_verified' => 80000])->assertOk();
+        $this->postJson("/api/v1/accounts/cash-close/{$later}/deposit", ['amount' => 80000, 'deposited_to' => 'office', 'deposit_date' => $this->today()])->assertCreated();
+        // Checking the older day afterwards settles it: there is nothing left to take in against it.
+        $this->patchJson("/api/v1/accounts/cash-close/{$older}/verify", ['amount_verified' => 30000])->assertOk()->assertJsonPath('data.status', 'closed');
+        $this->getJson('/api/v1/accounts/ledger?technician_id='.$this->tech->id)->assertJsonPath('data.cash_in_hand', 0);
+    }
+
     public function test_credit_sales_never_enter_cash_close(): void
     {
         $this->inTenant($this->tenant, function () {
