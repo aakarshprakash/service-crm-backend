@@ -88,7 +88,7 @@ class PublicPaymentController extends Controller
     {
         abort_unless(strlen($token) === 48 && ctype_alnum($token), 404);
         $invoice = app(TenantContext::class)->withoutScope(fn () => Invoice::where('pay_token', $token)->firstOrFail());
-        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $tenant = Tenant::cached($invoice->tenant_id);
         abort_unless($tenant->isUsable(), 404);
         // This request is bound to one invoice: scope everything else to its tenant.
         app(TenantContext::class)->set($invoice->tenant_id);

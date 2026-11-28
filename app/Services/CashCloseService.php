@@ -34,7 +34,7 @@ class CashCloseService
     /** FR-15.1: auto-computed summary for a technician and date. */
     public function summary(User $technician, string $date): array
     {
-        $tenant = Tenant::findOrFail($technician->tenant_id);
+        $tenant = Tenant::cached($technician->tenant_id);
         $existing = CashClose::where('technician_id', $technician->id)->whereDate('close_date', $date)
             ->with(['deposits', 'verifier:id,name'])->first();
 
@@ -92,7 +92,7 @@ class CashCloseService
     /** FR-15.2 (technician) / FR-15.4 force-close (admin). */
     public function submit(User $technician, string $date, int $amountConfirmed, ?string $remarks, User $by): CashClose
     {
-        $tenant = Tenant::findOrFail($technician->tenant_id);
+        $tenant = Tenant::cached($technician->tenant_id);
         $today = now($tenant->timezone)->toDateString();
         $force = $by->id !== $technician->id;
 

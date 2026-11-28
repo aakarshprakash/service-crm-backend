@@ -18,6 +18,13 @@ return [
     'default' => env('CACHE_STORE', 'database'),
 
     /*
+    | Where request rate-limit counters are kept. Every API call reads and updates them, so on the database
+    | store each request would lock and write a row; files cost nothing on a single server. Set
+    | CACHE_LIMITER_STORE to share counters between several servers (e.g. redis).
+    */
+    'limiter' => env('CACHE_LIMITER_STORE', env('CACHE_STORE', 'database') === 'database' ? 'file' : null),
+
+    /*
     |--------------------------------------------------------------------------
     | Cache Stores
     |--------------------------------------------------------------------------

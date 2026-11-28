@@ -11,6 +11,19 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Tenant extends Model
 {
+    /**
+     * The tenant with this id: the request's own (already loaded) when it is that one, otherwise read from the
+     * database. Services look up "the record's tenant" often, and it is nearly always the current one.
+     */
+    public static function cached(int $id): static
+    {
+        $context = app(\App\Support\TenantContext::class);
+        if ($context->has() && $context->id() === $id && ($tenant = $context->tenant())) {
+            return $tenant;
+        }
+
+        return static::findOrFail($id);
+    }
     use Auditable, SoftDeletes;
 
     protected $fillable = [

@@ -130,7 +130,7 @@ class JobLocationController extends Controller
     {
         abort_unless(strlen($token) === 40 && ctype_alnum($token), 404);
         $job = app(TenantContext::class)->withoutScope(fn () => ServiceJob::where('location_token', $token)->firstOrFail());
-        $tenant = Tenant::findOrFail($job->tenant_id);
+        $tenant = Tenant::cached($job->tenant_id);
         abort_unless($tenant->isUsable(), 404);
         app(TenantContext::class)->set($job->tenant_id);
         $job->load('customer');

@@ -46,7 +46,7 @@ class PaymentService
                 ]);
             }
 
-            $tenant = Tenant::findOrFail($invoice->tenant_id);
+            $tenant = Tenant::cached($invoice->tenant_id);
             $payment = Payment::create([
                 'invoice_id' => $invoice->id,
                 'job_visit_id' => $meta['job_visit_id'] ?? null,
@@ -72,7 +72,7 @@ class PaymentService
     /** Start a hosted-checkout payment for the invoice balance (FR-10.4). */
     public function createGatewayOrder(Invoice $invoice): array
     {
-        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $tenant = Tenant::cached($invoice->tenant_id);
         if (! $tenant->onlinePaymentsEnabled()) {
             throw ValidationException::withMessages(['invoice' => 'Online payment is not enabled for this company. Please pay the service agent or at the office.']);
         }
@@ -100,7 +100,7 @@ class PaymentService
     /** Browser callback after checkout – signature must verify before we trust it. */
     public function confirmCheckout(Invoice $invoice, array $payload): Payment
     {
-        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $tenant = Tenant::cached($invoice->tenant_id);
         $gateway = $this->gateways->forTenant($tenant);
         if (! $gateway || ! $gateway->verifyCheckout($payload)) {
             throw ValidationException::withMessages(['payment' => 'Payment verification failed.']);
@@ -142,7 +142,7 @@ class PaymentService
             if ($payment->status === 'success') {
                 return false; // already processed
             }
-            $tenant = Tenant::findOrFail($payment->tenant_id);
+            $tenant = Tenant::cached($payment->tenant_id);
             $payment->update([
                 'status' => $status,
                 'gateway_txn_id' => $txnId,

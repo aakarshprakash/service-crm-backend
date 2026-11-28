@@ -25,6 +25,13 @@ class TenantContext
         $this->tenant = null;
     }
 
+    /** Set the tenant from a model already loaded (saves reading it again). */
+    public function use(Tenant $tenant): void
+    {
+        $this->tenantId = $tenant->id;
+        $this->tenant = $tenant;
+    }
+
     public function id(): ?int
     {
         return $this->tenantId;

@@ -94,11 +94,29 @@ class LeaveService
     /** Per leave type: quota, used (approved), pending and remaining for a year. */
     public function balances(User $user, int $year): array
     {
-        $rows = LeaveRequest::where('user_id', $user->id)->whereYear('from_date', $year)->whereIn('status', ['approved', 'pending'])
-            ->selectRaw('leave_type_id, status, SUM(days) as d')->groupBy('leave_type_id', 'status')->get()
-            ->groupBy('leave_type_id');
+        return $this->balancesFor(collect([$user]), $year)[$user->id];
+    }
 
-        return LeaveType::where('is_active', true)->orderBy('name')->get()->map(function (LeaveType $t) use ($rows) {
+    /**
+     * balances() for many people at once: two queries in all, not two per person.
+     *
+     * @param  \Illuminate\Support\Collection<int, User>  $users
+     * @return array<int, array> keyed by user id
+     */
+    public function balancesFor(\Illuminate\Support\Collection $users, int $year): array
+    {
+        $ids = $users->pluck('id')->all();
+        $all = LeaveRequest::whereIn('user_id', $ids ?: [0])->whereYear('from_date', $year)->whereIn('status', ['approved', 'pending'])
+            ->selectRaw('user_id, leave_type_id, status, SUM(days) as d')->groupBy('user_id', 'leave_type_id', 'status')->get()
+            ->groupBy('user_id');
+        $types = LeaveType::where('is_active', true)->orderBy('name')->get();
+
+        return collect($ids)->mapWithKeys(fn ($id) => [$id => $this->balanceRows($types, ($all[$id] ?? collect())->groupBy('leave_type_id'))])->all();
+    }
+
+    private function balanceRows(\Illuminate\Support\Collection $types, \Illuminate\Support\Collection $rows): array
+    {
+        return $types->map(function (LeaveType $t) use ($rows) {
             $byStatus = ($rows[$t->id] ?? collect())->pluck('d', 'status');
             $used = (float) ($byStatus['approved'] ?? 0);
             $pending = (float) ($byStatus['pending'] ?? 0);

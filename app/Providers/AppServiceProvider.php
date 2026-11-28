@@ -48,6 +48,9 @@ class AppServiceProvider extends ServiceProvider
         ResetPassword::createUrlUsing(fn ($user, string $token) => rtrim(config('app.frontend_url'), '/')
             .'/reset-password?'.http_build_query(['token' => $token, 'email' => $user->getEmailForPasswordReset()]));
 
+        // Records "last used" at most once a minute instead of writing to the database on every request.
+        Sanctum::usePersonalAccessTokenModel(\App\Models\PersonalAccessToken::class);
+
         Sanctum::authenticateAccessTokensUsing(function (PersonalAccessToken $token, bool $isValid) {
             $idle = config('sanctum.idle_days');
 

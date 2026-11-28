@@ -46,7 +46,7 @@ class EstimateService
     public function create(array $data, User $by): Estimate
     {
         return DB::transaction(function () use ($data, $by) {
-            $tenant = Tenant::findOrFail($by->tenant_id);
+            $tenant = Tenant::cached($by->tenant_id);
             $today = now($tenant->timezone)->toDateString();
             $date = $data['estimate_date'] ?? $today;
             $this->assertLinks($data);
@@ -86,7 +86,7 @@ class EstimateService
         }
 
         return DB::transaction(function () use ($estimate, $data) {
-            $tenant = Tenant::findOrFail($estimate->tenant_id);
+            $tenant = Tenant::cached($estimate->tenant_id);
             $this->assertLinks($data + ['customer_id' => $estimate->customer_id]);
             // A blank number on an edit keeps the current one.
             if (blank($data['estimate_number'] ?? null)) {
@@ -201,7 +201,7 @@ class EstimateService
 
     public function pdf(Estimate $estimate, ?string $template = null): \Barryvdh\DomPDF\PDF
     {
-        $tenant = Tenant::findOrFail($estimate->tenant_id);
+        $tenant = Tenant::cached($estimate->tenant_id);
         $estimate->loadMissing(['customer', 'branch', 'job:id,crm_call_id,complaint_type_id', 'job.complaintType:id,name',
             'customerProduct.product.brand', 'customerProduct.brand', 'customerProduct.category', 'creator:id,name']);
         $breakup = $estimate->gst_breakup ?? ['lines' => [], 'summary' => []];

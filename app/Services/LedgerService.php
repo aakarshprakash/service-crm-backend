@@ -546,13 +546,33 @@ class LedgerService
     {
         $tz = $tenant->timezone;
         $now = CarbonImmutable::now($tz);
+        $first = $now->startOfMonth()->subMonths($months - 1);
+        $from = $first->toDateString();
+        $to = $now->toDateString();
+        [$start, $end] = $this->books->bounds($from, $to, $tz);
+        $offset = $now->format('P');
 
-        return collect(range($months - 1, 0))->map(function (int $back) use ($now, $tz) {
-            $m = $now->startOfMonth()->subMonths($back);
-            $end = $back === 0 ? $now : $m->endOfMonth();
-            $s = $this->books->summary($m->toDateString(), $end->toDateString(), $tz);
+        // The same figures as BooksService::summary() for each month, added up by month in one query per source
+        // instead of a full summary per month.
+        $paid = Payment::query()->where('payments.status', 'success')->whereBetween('payments.paid_at', [$start, $end])
+            ->join('invoices', 'invoices.id', '=', 'payments.invoice_id')
+            ->selectRaw("DATE_FORMAT(CONVERT_TZ(payments.paid_at, '+00:00', ?), '%Y-%m') as m, SUM(payments.amount) as t", [$offset])
+            ->groupBy('m')->pluck('t', 'm');
+        $manual = Income::query()->whereBetween('income_date', [$from, $to])
+            ->selectRaw("DATE_FORMAT(income_date, '%Y-%m') as m, SUM(amount) as t")->groupBy('m')->pluck('t', 'm');
+        $spent = Expense::query()->whereBetween('expense_date', [$from, $to])
+            ->selectRaw("DATE_FORMAT(expense_date, '%Y-%m') as m, SUM(amount) as t")->groupBy('m')->pluck('t', 'm');
+        $gst = [];
+        foreach ($this->books->gstByDay($start, $end, $tz) as $day => $tax) {
+            $gst[substr($day, 0, 7)] = ($gst[substr($day, 0, 7)] ?? 0) + $tax;
+        }
 
-            return ['month' => $m->format('Y-m'), 'income' => $s['income'], 'expense' => $s['expense'], 'net' => $s['net']];
+        return collect(range($months - 1, 0))->map(function (int $back) use ($now, $paid, $manual, $spent, $gst) {
+            $m = $now->startOfMonth()->subMonths($back)->format('Y-m');
+            $income = (int) ($paid[$m] ?? 0) + (int) ($manual[$m] ?? 0);
+            $expense = (int) ($spent[$m] ?? 0);
+
+            return ['month' => $m, 'income' => $income, 'expense' => $expense, 'net' => $income - (int) ($gst[$m] ?? 0) - $expense];
         })->all();
     }
 }

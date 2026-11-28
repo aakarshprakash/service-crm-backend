@@ -288,9 +288,11 @@ class HrController extends Controller
     public function leaveBalances(Request $request): JsonResponse
     {
         $year = $request->integer('year') ?: (int) CarbonImmutable::now($this->tenant()->timezone)->year;
-        $rows = $this->staff($request)->map(fn (User $u) => [
+        $staff = $this->staff($request);
+        $balances = $this->leaves->balancesFor($staff, $year);
+        $rows = $staff->map(fn (User $u) => [
             'user' => ['id' => $u->id, 'name' => $u->name, 'role' => $u->role->value],
-            'balances' => $this->leaves->balances($u, $year),
+            'balances' => $balances[$u->id],
         ])->values();
 
         return $this->ok(['year' => $year, 'rows' => $rows]);

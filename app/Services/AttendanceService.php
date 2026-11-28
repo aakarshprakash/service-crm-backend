@@ -45,7 +45,7 @@ class AttendanceService
         if ($user->punch_status === $data['type']) {
             throw ValidationException::withMessages(['type' => "You are already punched {$data['type']}."]);
         }
-        $tenant = Tenant::findOrFail($user->tenant_id);
+        $tenant = Tenant::cached($user->tenant_id);
         $mode = $tenant->setting('attendance.geofence', 'off');
         $applies = $mode !== 'off' && ($user->role !== Role::Technician || $tenant->setting('attendance.geofence_technicians', false));
         $hasLocation = isset($data['lat'], $data['lng']);
@@ -92,14 +92,18 @@ class AttendanceService
     }
 
     /** The shift someone works now: their own, otherwise the company's default. */
-    public function shiftFor(?EmployeeProfile $profile, ?Shift $default = null): ?Shift
+    /**
+     * Someone's own shift if active, else the company's default. A caller working through many people passes the
+     * default it already looked up, null included ("the company has none"), so it isn't read again per person.
+     */
+    public function shiftFor(?EmployeeProfile $profile, Shift|false|null $default = false): ?Shift
     {
         $own = $profile?->shift;
         if ($own?->is_active) {
             return $own;
         }
 
-        return $default ?? $this->defaultShift();
+        return $default === false ? $this->defaultShift() : $default;
     }
 
     private function defaultShift(): ?Shift
@@ -114,7 +118,7 @@ class AttendanceService
      */
     public function rules(User $user): array
     {
-        $tenant = Tenant::findOrFail($user->tenant_id);
+        $tenant = Tenant::cached($user->tenant_id);
         $mode = $tenant->setting('attendance.geofence', 'off');
         $applies = $mode !== 'off' && ($user->role !== Role::Technician || $tenant->setting('attendance.geofence_technicians', false));
         $branch = $user->branch_id ? Branch::find($user->branch_id) : null;

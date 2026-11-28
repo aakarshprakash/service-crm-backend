@@ -42,7 +42,7 @@ class InvoiceService
             }
 
             if (! $invoice) {
-                $tenant = Tenant::findOrFail($job->tenant_id);
+                $tenant = Tenant::cached($job->tenant_id);
                 $gst = $isGst === null ? $this->startsAsGst($tenant, 'job_bills') : $isGst && (bool) $tenant->gstin;
                 $invoice = new Invoice([
                     'job_id' => $job->id,
@@ -80,7 +80,7 @@ class InvoiceService
      */
     public function applyGst(Invoice $invoice): void
     {
-        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $tenant = Tenant::cached($invoice->tenant_id);
         $typed = (int) $invoice->total_service_charge + (int) $invoice->total_spare_charge - (int) $invoice->discount_amount;
         if (! $tenant->gstin || ! $invoice->is_gst) {
             $invoice->forceFill([
@@ -137,7 +137,7 @@ class InvoiceService
      */
     public function changeBillType(Invoice $invoice, bool $isGst): Invoice
     {
-        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $tenant = Tenant::cached($invoice->tenant_id);
         if ($isGst && ! $tenant->gstin) {
             throw ValidationException::withMessages(['is_gst' => 'Add your GSTIN under Settings → Company to issue GST bills.']);
         }
@@ -219,7 +219,7 @@ class InvoiceService
      */
     public function previewForVisit(JobVisit $visit, int $labour, ?int $spare, ?bool $isGst, ?bool $pricesIncludeGst): array
     {
-        $tenant = Tenant::findOrFail($visit->tenant_id);
+        $tenant = Tenant::cached($visit->tenant_id);
         $visit->loadMissing(['actionTaken', 'inventoryUsage.item', 'job']);
         $job = $visit->job;
         $invoice = Invoice::where('job_id', $job->id)->first();
@@ -267,7 +267,7 @@ class InvoiceService
     /** The invoice as a PDF in the company's chosen design (or $template, for a preview). */
     public function pdf(Invoice $invoice, ?string $template = null): \Barryvdh\DomPDF\PDF
     {
-        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $tenant = Tenant::cached($invoice->tenant_id);
         // Invoices created before GST support: work out the breakup once (an issued plain invoice keeps taxable = total).
         if ($invoice->exists && $invoice->gst_breakup === null && $invoice->taxable_amount === 0 && $invoice->total_amount !== 0) {
             $invoice->is_gst = $this->startsAsGst($tenant, $invoice->job_id ? 'job_bills' : 'walkin_bills');

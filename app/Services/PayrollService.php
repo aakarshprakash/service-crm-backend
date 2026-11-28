@@ -145,7 +145,7 @@ class PayrollService
     public function payslipPdf(Payslip $slip): \Barryvdh\DomPDF\PDF
     {
         $slip->loadMissing(['run', 'user.branch']);
-        $tenant = Tenant::findOrFail($slip->tenant_id);
+        $tenant = Tenant::cached($slip->tenant_id);
         $profile = EmployeeProfile::where('user_id', $slip->user_id)->first();
         $money = fn (int $v) => Money::format($v, $tenant->currency);
         $month = CarbonImmutable::parse($slip->run->month.'-01')->format('F Y');

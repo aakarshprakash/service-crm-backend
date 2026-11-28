@@ -31,7 +31,7 @@ class WalkInBillService
     public function create(array $data, User $by): Invoice
     {
         $invoice = DB::transaction(function () use ($data, $by) {
-            $tenant = Tenant::findOrFail($by->tenant_id);
+            $tenant = Tenant::cached($by->tenant_id);
             $customer = $this->customer($data);
             $branchId = $data['branch_id'] ?? $by->branch_id ?? Branch::orderBy('id')->value('id');
 

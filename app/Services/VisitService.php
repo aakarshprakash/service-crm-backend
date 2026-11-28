@@ -53,7 +53,7 @@ class VisitService
             if ($job->needs_resume_approval) {
                 throw ValidationException::withMessages(['job' => 'This job was left '.str_replace('_', ' ', $job->status->value).'. Ask the office to approve it before the next visit.']);
             }
-            $tenant = Tenant::findOrFail($job->tenant_id);
+            $tenant = Tenant::cached($job->tenant_id);
             if ($tenant->setting('jobs.require_punch_in', true) && User::whereKey($technician->id)->value('punch_status') !== 'in') {
                 throw ValidationException::withMessages(['punch' => 'Punch in before you start a service.']);
             }
@@ -398,7 +398,7 @@ class VisitService
                 $collect = 0;
             }
 
-            if ($status === 'completed' && Tenant::findOrFail($visit->tenant_id)->setting('jobs.require_signature', false)
+            if ($status === 'completed' && Tenant::cached($visit->tenant_id)->setting('jobs.require_signature', false)
                 && ! JobImage::where('job_visit_id', $visit->id)->where('type', 'signature')->exists()) {
                 throw ValidationException::withMessages(['signature' => 'Take the customer\'s signature before completing the visit.']);
             }

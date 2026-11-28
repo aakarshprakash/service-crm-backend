@@ -20,7 +20,7 @@ class AutoAssigner
      */
     public function pick(ServiceJob $job): array
     {
-        $tenant = Tenant::findOrFail($job->tenant_id);
+        $tenant = Tenant::cached($job->tenant_id);
         $max = max(1, (int) $tenant->setting('auto_assign_max_jobs', 10));
         $onDutyOnly = (bool) $tenant->setting('auto_assign_on_duty_only', false);
 
