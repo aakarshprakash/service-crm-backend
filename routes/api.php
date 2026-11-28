@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\Admin\PlatformController;
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\BooksController;
+use App\Http\Controllers\Api\V1\EnquiryController;
 use App\Http\Controllers\Api\V1\OfficeDayCloseController;
 use App\Http\Controllers\Api\V1\ExpenseClaimController;
 use App\Http\Controllers\Api\V1\ExpenseController;
@@ -238,6 +239,21 @@ Route::prefix('v1')->group(function () {
             Route::delete('estimates/{id}', [EstimateController::class, 'destroy'])->whereNumber('id');
         });
 
+        // Enquiries (leads) for repairs and sales.
+        Route::middleware('can:enquiries.view')->group(function () {
+            Route::get('enquiries', [EnquiryController::class, 'index']);
+            Route::get('enquiries/summary', [EnquiryController::class, 'summary']);
+            Route::get('enquiries/{id}', [EnquiryController::class, 'show'])->whereNumber('id');
+        });
+        Route::middleware('can:enquiries.manage')->group(function () {
+            Route::post('enquiries', [EnquiryController::class, 'store']);
+            Route::patch('enquiries/{id}', [EnquiryController::class, 'update'])->whereNumber('id');
+            Route::post('enquiries/{id}/notes', [EnquiryController::class, 'note'])->whereNumber('id');
+            Route::post('enquiries/{id}/status', [EnquiryController::class, 'status'])->whereNumber('id');
+            Route::post('enquiries/{id}/customer', [EnquiryController::class, 'customer'])->whereNumber('id');
+            Route::delete('enquiries/{id}', [EnquiryController::class, 'destroy'])->whereNumber('id');
+        });
+
         // Walk-in (counter) bills, expenses and the mini accounts books.
         Route::post('walk-in-bills', [WalkInBillController::class, 'store'])->middleware('can:billing.walkin');
         Route::middleware('can:expenses.manage')->group(function () {
@@ -262,6 +278,9 @@ Route::prefix('v1')->group(function () {
             Route::get('books/receivables', [BooksController::class, 'receivables']);
             Route::get('books/profit-loss', [BooksController::class, 'profitLoss']);
             Route::get('books/transfers', [BooksController::class, 'transfers']);
+            Route::get('books/accounts', [BooksController::class, 'accounts']);
+            Route::get('books/accounts/ledger', [BooksController::class, 'accountLedger']);
+            Route::get('books/accounts/customers', [BooksController::class, 'customerAccounts']);
         });
         Route::middleware('can:expenses.manage')->group(function () {
             Route::put('books/opening', [BooksController::class, 'updateOpening']);
@@ -356,6 +375,7 @@ Route::prefix('v1')->group(function () {
 
         // Invoices & payments (§5.10)
         Route::post('invoices/{id}/bill-type', [InvoiceController::class, 'changeBillType'])->whereNumber('id')->middleware('can:invoices.change_bill_type');
+        Route::get('invoices/{id}/bill-type', [InvoiceController::class, 'billTypeOptions'])->whereNumber('id')->middleware('can:invoices.change_bill_type');
         Route::middleware('can:invoices.view')->group(function () {
             Route::get('invoices', [InvoiceController::class, 'index']);
             Route::get('invoices/{id}', [InvoiceController::class, 'show'])->whereNumber('id');

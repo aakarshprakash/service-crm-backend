@@ -80,15 +80,19 @@ class InvoiceService
      */
     public function applyGst(Invoice $invoice): void
     {
+        $invoice->forceFill($this->gstFigures($invoice))->save();
+    }
+
+    /** What applyGst() would store on the bill, worked out without saving anything. */
+    private function gstFigures(Invoice $invoice): array
+    {
         $tenant = Tenant::findOrFail($invoice->tenant_id);
         $typed = (int) $invoice->total_service_charge + (int) $invoice->total_spare_charge - (int) $invoice->discount_amount;
         if (! $tenant->gstin || ! $invoice->is_gst) {
-            $invoice->forceFill([
+            return [
                 'is_gst' => false, 'total_amount' => $typed, 'taxable_amount' => $typed, 'cgst_amount' => 0, 'sgst_amount' => 0,
                 'igst_amount' => 0, 'place_of_supply' => null, 'customer_gstin' => null, 'gst_breakup' => null,
-            ])->save();
-
-            return;
+            ];
         }
 
         $customer = Customer::withTrashed()->find($invoice->customer_id);
@@ -104,7 +108,7 @@ class InvoiceService
             throw new \RuntimeException("GST breakup {$gst['totals']['total']} does not match invoice {$invoice->invoice_number} total {$typed}.");
         }
 
-        $invoice->forceFill([
+        return [
             'is_gst' => true,
             'prices_include_gst' => $inclusive,
             'total_amount' => $gst['totals']['total'],
@@ -115,7 +119,43 @@ class InvoiceService
             'place_of_supply' => IndianStates::name($theirs ?? $ours),
             'customer_gstin' => $customer?->gstin ?: null,
             'gst_breakup' => ['lines' => $gst['lines'], 'summary' => $gst['summary']],
-        ])->save();
+        ];
+    }
+
+    /**
+     * The bill as each kind it could be switched to, so the person choosing sees the total before deciding:
+     * non-GST, GST included in the prices, and GST added on top.
+     *
+     * @return array<string, array{is_gst: bool, prices_include_gst: bool, total: int, taxable: int, tax: int, paid: int, due: int, current: bool}>
+     */
+    public function billTypeOptions(Invoice $invoice): array
+    {
+        $tenant = Tenant::findOrFail($invoice->tenant_id);
+        $kinds = ['non_gst' => [false, true]];
+        if ($tenant->gstin) {
+            $kinds += ['gst_inclusive' => [true, true], 'gst_exclusive' => [true, false]];
+        }
+        $paid = (int) $invoice->paid_amount;
+
+        return collect($kinds)->map(function (array $kind) use ($invoice, $paid) {
+            [$isGst, $inclusive] = $kind;
+            $copy = clone $invoice;
+            $copy->is_gst = $isGst;
+            $copy->prices_include_gst = $inclusive;
+            $f = $this->gstFigures($copy);
+            $tax = $f['cgst_amount'] + $f['sgst_amount'] + $f['igst_amount'];
+
+            return [
+                'is_gst' => $isGst,
+                'prices_include_gst' => $inclusive,
+                'total' => $f['total_amount'],
+                'taxable' => $f['taxable_amount'],
+                'tax' => $tax,
+                'paid' => $paid,
+                'due' => max(0, $f['total_amount'] - $paid),
+                'current' => (bool) $invoice->is_gst === $isGst && (! $isGst || ($invoice->prices_include_gst !== false) === $inclusive),
+            ];
+        })->all();
     }
 
     /** Whether a new job bill's prices include GST (Settings → GST; inclusive unless changed). */
@@ -135,17 +175,21 @@ class InvoiceService
      * change, only whether the tax is split out and shown. With GST-exclusive prices the GST on top comes
      * or goes, so the balance due moves with it.
      */
-    public function changeBillType(Invoice $invoice, bool $isGst): Invoice
+    public function changeBillType(Invoice $invoice, bool $isGst, ?bool $pricesIncludeGst = null): Invoice
     {
         $tenant = Tenant::findOrFail($invoice->tenant_id);
         if ($isGst && ! $tenant->gstin) {
             throw ValidationException::withMessages(['is_gst' => 'Add your GSTIN under Settings → Company to issue GST bills.']);
         }
 
-        return DB::transaction(function () use ($invoice, $isGst, $tenant) {
+        return DB::transaction(function () use ($invoice, $isGst, $pricesIncludeGst, $tenant) {
             // With non-GST bills in a series of their own, a bill that changes kind takes the next number of its new series.
             $moves = DocumentNumber::invoiceSeries($tenant, (bool) $invoice->is_gst) !== DocumentNumber::invoiceSeries($tenant, $isGst);
             $invoice->is_gst = $isGst;
+            // Becoming (or staying) a GST bill: the prices either already include the GST, or the GST goes on top.
+            if ($isGst && $pricesIncludeGst !== null) {
+                $invoice->prices_include_gst = $pricesIncludeGst;
+            }
             if ($moves) {
                 $invoice->invoice_number = DocumentNumber::invoice($tenant, $isGst);
             }

@@ -51,6 +51,10 @@ return [
     'estimates.view' => [...$staff, 'head_engineer', 'service_tracker'],
     'estimates.manage' => [...$staff, 'head_engineer', 'service_tracker'], // create, send and record the customer's answer
 
+    // Enquiries (leads) for a repair or a sale, followed up until they become a job or a quotation.
+    'enquiries.view' => [...$staff, 'head_engineer', 'service_tracker'],
+    'enquiries.manage' => [...$staff, 'head_engineer', 'service_tracker'],
+
     'billing.walkin' => $staff,
     'expenses.manage' => ['admin', 'accountant'],
     'accounts.view' => ['admin', 'accountant'],

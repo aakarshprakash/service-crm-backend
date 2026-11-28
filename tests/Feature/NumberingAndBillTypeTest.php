@@ -158,6 +158,36 @@ class NumberingAndBillTypeTest extends TestCase
             ->assertJsonPath('data.is_gst', false)->assertJsonPath('data.total_amount', 118000)->assertJsonPath('data.cgst_amount', 0)->assertJsonPath('data.gst_breakup', null);
     }
 
+    public function test_a_non_gst_bill_can_become_gst_inclusive_or_exclusive(): void
+    {
+        $this->registerForGst();
+        $this->putJson('/api/v1/settings/preferences', ['gst' => ['job_bills' => 'non_gst']])->assertOk();
+        $invoice = $this->jobInvoice();
+
+        // The options, before anything changes.
+        $options = $this->getJson("/api/v1/invoices/{$invoice->id}/bill-type")->assertOk()->json('data');
+        $this->assertTrue($options['non_gst']['current']);
+        $this->assertSame(118000, $options['gst_inclusive']['total']);
+        $this->assertSame(18000, $options['gst_inclusive']['tax']);
+        $this->assertSame(139240, $options['gst_exclusive']['total']);
+        $this->assertSame(21240, $options['gst_exclusive']['tax']);
+        $this->assertFalse($invoice->fresh()->is_gst);
+
+        // GST added on top: the customer now owes the tax as well.
+        $this->postJson("/api/v1/invoices/{$invoice->id}/bill-type", ['is_gst' => true, 'prices_include_gst' => false])->assertOk()
+            ->assertJsonPath('data.is_gst', true)->assertJsonPath('data.prices_include_gst', false)
+            ->assertJsonPath('data.total_amount', 139240)->assertJsonPath('data.taxable_amount', 118000)->assertJsonPath('data.balance_amount', 139240);
+        $this->assertTrue($this->getJson("/api/v1/invoices/{$invoice->id}/bill-type")->json('data.gst_exclusive.current'));
+
+        // A GST bill can switch to prices that include the GST.
+        $this->postJson("/api/v1/invoices/{$invoice->id}/bill-type", ['is_gst' => true, 'prices_include_gst' => true])->assertOk()
+            ->assertJsonPath('data.prices_include_gst', true)->assertJsonPath('data.total_amount', 118000)->assertJsonPath('data.taxable_amount', 100000);
+
+        // Without a GSTIN only the non-GST option is offered.
+        $this->tenant->forceFill(['gstin' => null])->save();
+        $this->assertSame(['non_gst'], array_keys($this->getJson("/api/v1/invoices/{$invoice->id}/bill-type")->json('data')));
+    }
+
     public function test_a_switched_bill_keeps_its_type_after_another_visit(): void
     {
         $this->registerForGst();

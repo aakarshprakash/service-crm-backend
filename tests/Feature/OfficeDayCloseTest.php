@@ -98,6 +98,21 @@ class OfficeDayCloseTest extends TestCase
         });
     }
 
+    public function test_the_summary_counts_technicians_cash_once_and_the_ledger_balances(): void
+    {
+        $this->busyDay();
+        // Cash book: ₹200 + ₹1,000 collected + ₹30 income − ₹50 − ₹25 spent − ₹40 banked.
+        $balances = $this->getJson('/api/v1/books/overview')->assertOk()->json('data.balances');
+        $this->assertSame(111500, $balances['cash_book']);
+        $this->assertSame(37500, $balances['with_technicians']);
+        // The office's own cash is what the drawer should hold, not the book with technicians' cash in it again.
+        $this->assertSame(74000, $balances['cash']);
+
+        $tb = $this->getJson('/api/v1/books/accounts')->assertOk()->json('data');
+        $this->assertSame($tb['totals']['closing_dr'], $tb['totals']['closing_cr']);
+        $this->assertSame(111500, collect($tb['accounts'])->firstWhere('code', 'cash')['closing']);
+    }
+
     public function test_expected_cash_counts_only_money_through_the_office(): void
     {
         $this->busyDay();

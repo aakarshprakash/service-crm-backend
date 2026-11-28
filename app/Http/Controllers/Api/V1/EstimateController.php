@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Estimate;
 use App\Rules\Gstin;
+use App\Services\EnquiryService;
 use App\Services\EstimateService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -64,7 +65,13 @@ class EstimateController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $estimate = $this->estimates->create($request->validate($this->rules(), self::MESSAGES), $request->user());
+        $data = $request->validate($this->rules(), self::MESSAGES);
+        // Made from an enquiry: the enquiry follows the quotation, and closes when the customer answers it.
+        $enquiryId = $request->validate(['enquiry_id' => ['nullable', 'integer', Rule::exists('enquiries', 'id')->where('tenant_id', app(TenantContext::class)->id())]])['enquiry_id'] ?? null;
+        $estimate = $this->estimates->create($data, $request->user());
+        if ($enquiryId) {
+            app(EnquiryService::class)->estimateCreated((int) $enquiryId, $estimate, $request->user());
+        }
 
         return $this->created($this->present($estimate), "Estimate {$estimate->estimate_number} created.");
     }
@@ -86,6 +93,7 @@ class EstimateController extends Controller
             'note' => ['nullable', 'string', 'max:500'],
         ]);
         $estimate = $this->estimates->setStatus(Estimate::findOrFail($id), $data['status'], $data['note'] ?? null, $request->user());
+        app(EnquiryService::class)->estimateDecided($estimate, $request->user());
 
         return $this->ok($this->present($estimate), match ($data['status']) {
             'sent' => 'Marked as sent to the customer.',

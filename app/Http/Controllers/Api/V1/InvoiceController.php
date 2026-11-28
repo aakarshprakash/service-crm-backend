@@ -57,10 +57,23 @@ class InvoiceController extends Controller
 
     public function changeBillType(Request $request, int $id, InvoiceService $invoices): JsonResponse
     {
-        $data = $request->validate(['is_gst' => ['required', 'boolean']]);
-        $invoice = $invoices->changeBillType(Invoice::findOrFail($id), $data['is_gst']);
+        $data = $request->validate(['is_gst' => ['required', 'boolean'], 'prices_include_gst' => ['sometimes', 'nullable', 'boolean']]);
+        $invoice = Invoice::findOrFail($id);
+        $wasGst = (bool) $invoice->is_gst;
+        $invoice = $invoices->changeBillType($invoice, $data['is_gst'], $data['prices_include_gst'] ?? null);
+        $style = $invoice->prices_include_gst === false ? 'GST added on top' : 'GST included in the prices';
 
-        return $this->ok($invoice, $data['is_gst'] ? 'Changed to a GST bill.' : 'Changed to a non-GST bill.');
+        return $this->ok($invoice, match (true) {
+            ! $data['is_gst'] => 'Changed to a non-GST bill.',
+            $wasGst => "Now {$style}.",
+            default => "Changed to a GST bill ({$style}).",
+        });
+    }
+
+    /** What the bill would total as non-GST, GST inclusive and GST exclusive, before switching. */
+    public function billTypeOptions(int $id, InvoiceService $invoices): JsonResponse
+    {
+        return $this->ok($invoices->billTypeOptions(Invoice::findOrFail($id)));
     }
 
     public function show(Request $request, int $id): JsonResponse

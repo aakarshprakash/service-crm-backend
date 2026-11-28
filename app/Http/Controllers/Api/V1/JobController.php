@@ -8,6 +8,7 @@ use App\Models\CustomerProduct;
 use App\Models\JobVisit;
 use App\Models\ServiceJob;
 use App\Models\User;
+use App\Services\EnquiryService;
 use App\Services\JobService;
 use App\Services\Reports\LocationAnalysis;
 use App\Support\Money;
@@ -121,7 +122,12 @@ class JobController extends Controller
         if ($autoAssign) {
             unset($data['assigned_technician_id']);
         }
+        // Booked from an enquiry: that enquiry is converted to this job.
+        $enquiryId = $request->validate(['enquiry_id' => ['nullable', 'integer', Rule::exists('enquiries', 'id')->where('tenant_id', app(TenantContext::class)->id())]])['enquiry_id'] ?? null;
         $job = $this->jobs->create($data, $request->user());
+        if ($enquiryId) {
+            app(EnquiryService::class)->jobCreated((int) $enquiryId, $job, $request->user());
+        }
 
         $message = "Job {$job->crm_call_id} created.";
         $meta = [];

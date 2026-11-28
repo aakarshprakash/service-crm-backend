@@ -8,6 +8,7 @@ use App\Models\FundTransfer;
 use App\Models\User;
 use App\Services\BooksService;
 use App\Services\CashCloseService;
+use App\Services\GeneralLedgerService;
 use App\Services\LedgerService;
 use App\Services\OfficeDayCloseService;
 use App\Support\TenantContext;
@@ -58,7 +59,14 @@ class BooksController extends Controller
                 'income_by_source' => $month['income_by_source'], 'expense_by_category' => $month['expense_by_category'],
             ],
             'last_month' => ['income' => $last['income'], 'gst' => $last['gst'], 'expense' => $last['expense'], 'net' => $last['net']],
-            'balances' => ['cash' => $ledger->balance($tenant, 'cash'), 'bank' => $ledger->balance($tenant, 'bank'), 'with_technicians' => (int) $withTechnicians],
+            // The cash book counts a technician's collection as cash on the day the customer paid, so the office's
+            // share is the book less what technicians still hold; otherwise that cash would be counted twice.
+            'balances' => [
+                'cash' => $ledger->balance($tenant, 'cash') - (int) $withTechnicians,
+                'cash_book' => $ledger->balance($tenant, 'cash'),
+                'bank' => $ledger->balance($tenant, 'bank'),
+                'with_technicians' => (int) $withTechnicians,
+            ],
             'receivables' => ['total' => $receivables['totals']['total'], 'customers' => $receivables['customers'], 'buckets' => $receivables['totals']],
             'pending_cash_closes' => CashClose::where('status', 'submitted')->count(),
             'trend' => $ledger->monthlyTrend($tenant),
@@ -92,6 +100,37 @@ class BooksController extends Controller
         }
 
         return $this->ok($register);
+    }
+
+    /** Every ledger account with its opening, debits, credits and closing for the period (the trial balance). */
+    public function accounts(Request $request, GeneralLedgerService $gl): JsonResponse
+    {
+        [$from, $to] = $this->period($request);
+
+        return $this->ok($gl->trialBalance(app(TenantContext::class)->tenant(), $from, $to));
+    }
+
+    /** One ledger account, entry by entry, with the running balance. */
+    public function accountLedger(Request $request, GeneralLedgerService $gl): JsonResponse
+    {
+        $request->validate(['account' => ['required', 'string', 'max:40', 'regex:/^(cash|bank|debtors|gst|capital|sales_job|sales_walkin|cash_diff|income:\d+|expense:\d+|customer:\d+)$/']],
+            ['account.regex' => 'Choose an account from the list.']);
+        [$from, $to] = $this->period($request);
+        $code = (string) $request->input('account');
+        if (preg_match('/^customer:(\d+)$/', $code, $m)) {
+            \App\Models\Customer::withTrashed()->findOrFail((int) $m[1]);
+        }
+
+        return $this->ok($gl->account(app(TenantContext::class)->tenant(), $code, $from, $to));
+    }
+
+    /** Each customer's account for the period: owed at the start, billed, paid, owed at the end. */
+    public function customerAccounts(Request $request, GeneralLedgerService $gl): JsonResponse
+    {
+        $request->validate(['search' => ['nullable', 'string', 'max:100']]);
+        [$from, $to] = $this->period($request);
+
+        return $this->ok($gl->customers(app(TenantContext::class)->tenant(), $from, $to, $request->input('search')));
     }
 
     public function receivables(Request $request, LedgerService $ledger): JsonResponse
