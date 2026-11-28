@@ -90,6 +90,22 @@ class JobResumeApprovalTest extends TestCase
         $this->getJson("/api/v1/jobs/{$job->id}")->assertJsonCount(2, 'data.visits');
     }
 
+    public function test_the_office_can_list_jobs_whose_technician_asked_to_resume(): void
+    {
+        $asked = $this->leftAs('pending');
+        $this->leftAs('pending'); // left pending too, but nobody asked
+        $this->postJson("/api/v1/jobs/{$asked->id}/resume-request", ['note' => 'Customer is home now'])->assertOk();
+
+        $this->forgetGuards()->actingAsUser($this->ctx['admin']);
+        $ids = $this->getJson('/api/v1/jobs?status=pending,part_pending&resume_requested=1')->assertOk()->json('data.*.id');
+        $this->assertSame([$asked->id], $ids);
+        $this->assertCount(2, $this->getJson('/api/v1/jobs?status=pending')->json('data'));
+
+        // Once decided, it leaves the list.
+        $this->postJson("/api/v1/jobs/{$asked->id}/resume/approve")->assertOk();
+        $this->assertSame([], $this->getJson('/api/v1/jobs?resume_requested=1')->json('data'));
+    }
+
     public function test_part_received_and_a_rejected_cancellation_count_as_the_go_ahead(): void
     {
         $job = $this->leftAs('part_pending');
