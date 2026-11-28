@@ -447,6 +447,8 @@ class JobController extends Controller
             ->when($request->input('warranty') === 'out', fn ($q) => $q->whereHas('customerProduct', fn ($p) => $p->outOfWarranty(now($tz)->toDateString())))
             ->when($request->filled('from'), fn ($q) => $q->where('created_at', '>=', $request->date('from', null, $tz)->startOfDay()->utc()))
             ->when($request->filled('to'), fn ($q) => $q->where('created_at', '<=', $request->date('to', null, $tz)->endOfDay()->utc()))
+            // Technicians asking to go back to a job they left pending (Manager app approvals).
+            ->when($request->boolean('resume_requested'), fn ($q) => $q->whereNotNull('resume_requested_at'))
             ->when($request->boolean('today'), fn ($q) => $q->whereBetween('scheduled_at', [now($tz)->startOfDay()->utc(), now($tz)->endOfDay()->utc()]))
             // Same rule as the dashboard's "overdue" count: still open, visit date before today.
             ->when($request->boolean('overdue'), fn ($q) => $q->whereIn('status', ['open', 'pending'])->where('scheduled_at', '<', now($tz)->startOfDay()->utc()))
