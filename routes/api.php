@@ -218,6 +218,7 @@ Route::prefix('v1')->group(function () {
             Route::delete('visits/{id}/images/{imageId}', [VisitController::class, 'deleteImage'])->whereNumber(['id', 'imageId']);
             Route::post('visits/{id}/spares', [VisitController::class, 'addSpare'])->whereNumber('id');
             Route::delete('visits/{id}/spares/{usageId}', [VisitController::class, 'removeSpare'])->whereNumber(['id', 'usageId']);
+            Route::post('visits/{id}/bill-preview', [VisitController::class, 'billPreview'])->whereNumber('id')->middleware('throttle:120,1');
             Route::post('visits/{id}/complete', [VisitController::class, 'complete'])->whereNumber('id');
             Route::post('invoices/{id}/collect', [InvoiceController::class, 'collect'])->whereNumber('id');
         });

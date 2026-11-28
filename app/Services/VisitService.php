@@ -441,7 +441,9 @@ class VisitService
             $newBill = ! Invoice::where('job_id', $job->id)->exists();
             // The technician's choice goes in when the bill is made, so it is numbered in the right series.
             $choice = $newBill && $status !== 'cancelled' && isset($data['is_gst']) ? (bool) $data['is_gst'] : null;
-            $invoice = $this->invoices->syncForJob($job, $choice);
+            // GST inclusive / exclusive works the same way: chosen once, with the new bill.
+            $style = $newBill && $status !== 'cancelled' && isset($data['prices_include_gst']) ? (bool) $data['prices_include_gst'] : null;
+            $invoice = $this->invoices->syncForJob($job, $choice, $style);
             if ($invoice && $newBill && $status !== 'cancelled' && isset($data['is_gst'])) {
                 $invoice = $this->invoices->changeBillType($invoice, (bool) $data['is_gst']);
             }

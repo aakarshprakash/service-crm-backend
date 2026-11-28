@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\JobImage;
+use App\Models\JobVisit;
 use App\Models\ServiceJob;
 use App\Models\Tenant;
 use App\Models\UpiAccount;
@@ -25,10 +26,11 @@ class InvoiceService
      * Create or refresh the job's invoice from all closed visits (FR-10.1):
      * Total Service Charge + Total Spare Charge = Total Charge.
      */
-    public function syncForJob(ServiceJob $job, ?bool $isGst = null): ?Invoice
+    public function syncForJob(ServiceJob $job, ?bool $isGst = null, ?bool $pricesIncludeGst = null): ?Invoice
     {
         // $isGst: the technician's choice for a new bill, so its number comes from the right series straight away.
-        return DB::transaction(function () use ($job, $isGst) {
+        // $pricesIncludeGst: their choice of GST inclusive / exclusive for a new bill (else Settings → GST).
+        return DB::transaction(function () use ($job, $isGst, $pricesIncludeGst) {
             $visits = $job->visits()->where('status', '!=', 'in_progress')->get();
             $service = (int) $visits->sum('labour_charge');
             $spare = (int) $visits->sum('spare_charge');
@@ -50,6 +52,7 @@ class InvoiceService
                     'pay_token' => Str::random(48),
                     'generated_at' => now(),
                     'is_gst' => $gst,
+                    'prices_include_gst' => $pricesIncludeGst ?? $this->jobPricesIncludeGst($tenant),
                 ]);
             }
 
@@ -69,9 +72,9 @@ class InvoiceService
 
     /**
      * Snapshot the GST breakup of the invoice and set what the customer pays.
-     * GST inclusive (every job bill, and counter bills unless chosen otherwise): the tax is inside the
-     * prices, so the total is the prices less the discount. GST exclusive (counter bills only): the prices
-     * are before GST and the tax is added on top. A non-GST bill, or any bill from a company without a
+     * GST inclusive (unless chosen otherwise on the bill or in Settings → GST): the tax is inside the
+     * prices, so the total is the prices less the discount. GST exclusive: the prices are before GST
+     * and the tax is added on top. A non-GST bill, or any bill from a company without a
      * GSTIN, is a plain invoice with no tax: the customer pays the prices less the discount.
      * The caller refreshes the paid / balance figures afterwards, as the total can move.
      */
@@ -93,8 +96,8 @@ class InvoiceService
         $theirs = IndianStates::resolve($customer?->gstin, $customer?->state);
         $interState = $ours && $theirs && $ours !== $theirs;
 
-        // Job bills are collected by technicians at the price they typed, so they always include GST.
-        $inclusive = $invoice->job_id || $invoice->prices_include_gst !== false;
+        // Bills made before the choice existed are GST inclusive.
+        $inclusive = $invoice->prices_include_gst !== false;
         $gst = Gst::breakup($this->gstLines($invoice, $tenant), (int) $invoice->discount_amount, $interState, $inclusive);
         if ($inclusive && $gst['totals']['total'] !== $typed) {
             // By construction this cannot happen; never issue a tax invoice that does not add up.
@@ -113,6 +116,12 @@ class InvoiceService
             'customer_gstin' => $customer?->gstin ?: null,
             'gst_breakup' => ['lines' => $gst['lines'], 'summary' => $gst['summary']],
         ])->save();
+    }
+
+    /** Whether a new job bill's prices include GST (Settings → GST; inclusive unless changed). */
+    public function jobPricesIncludeGst(Tenant $tenant): bool
+    {
+        return $tenant->setting('gst.job_prices', 'include_gst') !== 'before_gst';
     }
 
     /** Whether a new bill of this kind ('job_bills' or 'walkin_bills') starts as a GST bill. */
@@ -150,12 +159,11 @@ class InvoiceService
     /** Invoice lines at their amounts as typed: a walk-in bill's own items, or a job's visits. */
     private function gstLines(Invoice $invoice, Tenant $tenant): array
     {
-        $sac = (string) $tenant->setting('gst.service_sac', '998719');
-        $serviceRate = (float) $tenant->setting('gst.service_rate', 18);
-        $partRate = (float) $tenant->setting('gst.part_rate', 18);
-        $part = fn ($item) => ['hsn' => $item?->hsn_code, 'uom' => $item?->unit_of_measure, 'gst_rate' => $item?->gst_rate !== null ? (float) $item->gst_rate : $partRate];
-
         if (! $invoice->job_id) {
+            $sac = (string) $tenant->setting('gst.service_sac', '998719');
+            $serviceRate = (float) $tenant->setting('gst.service_rate', 18);
+            $part = fn ($item) => ['hsn' => $item?->hsn_code, 'uom' => $item?->unit_of_measure, 'gst_rate' => $item?->gst_rate !== null ? (float) $item->gst_rate : (float) $tenant->setting('gst.part_rate', 18)];
+
             // A line's own rate (chosen on the bill) wins over the part's rate and Settings.
             return $invoice->items()->with('item')->orderBy('id')->get()->map(fn ($l) => array_merge(
                 $l->type === 'part' ? $part($l->item) : ['hsn' => $sac, 'gst_rate' => $serviceRate],
@@ -164,24 +172,89 @@ class InvoiceService
             ))->all();
         }
 
+        return $this->jobLines($invoice->job, $tenant);
+    }
+
+    /** A job's bill lines: every closed visit's service charge, parts and spare adjustment, oldest first. */
+    private function jobLines(ServiceJob $job, Tenant $tenant, ?int $exceptVisitId = null): array
+    {
+        $visits = $job->visits()->where('status', '!=', 'in_progress')->when($exceptVisitId, fn ($q) => $q->whereKeyNot($exceptVisitId))
+            ->with(['actionTaken', 'inventoryUsage.item'])->orderBy('id')->get();
+
+        return $visits->flatMap(fn (JobVisit $visit) => $this->visitLines($visit, $tenant, (int) $visit->labour_charge, (int) $visit->spare_charge))->all();
+    }
+
+    /** One visit's bill lines at the given charges: service, each part used, and any spare charge beyond the parts. */
+    private function visitLines(JobVisit $visit, Tenant $tenant, int $labour, int $spare): array
+    {
+        $sac = (string) $tenant->setting('gst.service_sac', '998719');
+        $serviceRate = (float) $tenant->setting('gst.service_rate', 18);
+        $partRate = (float) $tenant->setting('gst.part_rate', 18);
+        $part = fn ($item) => ['hsn' => $item?->hsn_code, 'uom' => $item?->unit_of_measure, 'gst_rate' => $item?->gst_rate !== null ? (float) $item->gst_rate : $partRate];
+
         $lines = [];
-        $visits = $invoice->job->visits()->where('status', '!=', 'in_progress')->with(['actionTaken', 'inventoryUsage.item'])->orderBy('id')->get();
-        foreach ($visits as $visit) {
-            if ((int) $visit->labour_charge !== 0) {
-                $lines[] = ['type' => 'service', 'description' => 'Service charge'.($visit->actionTaken ? ' – '.$visit->actionTaken->name : ''),
-                    'qty' => 1, 'gross' => (int) $visit->labour_charge, 'hsn' => $sac, 'gst_rate' => $serviceRate];
-            }
-            foreach ($visit->inventoryUsage as $usage) {
-                $lines[] = ['type' => 'part', 'description' => trim(($usage->item?->name ?? 'Spare part').' '.($usage->item?->code ? "({$usage->item->code})" : '')),
-                    'qty' => (float) $usage->quantity, 'gross' => (int) $usage->total_price] + $part($usage->item);
-            }
-            $adjustment = (int) $visit->spare_charge - (int) $visit->inventoryUsage->sum('total_price');
-            if ($adjustment !== 0) {
-                $lines[] = ['type' => 'part', 'description' => 'Spare charge adjustment', 'qty' => 1, 'gross' => $adjustment, 'hsn' => null, 'gst_rate' => $partRate];
-            }
+        if ($labour !== 0) {
+            $lines[] = ['type' => 'service', 'description' => 'Service charge'.($visit->actionTaken ? ' – '.$visit->actionTaken->name : ''),
+                'qty' => 1, 'gross' => $labour, 'hsn' => $sac, 'gst_rate' => $serviceRate];
+        }
+        foreach ($visit->inventoryUsage as $usage) {
+            $lines[] = ['type' => 'part', 'description' => trim(($usage->item?->name ?? 'Spare part').' '.($usage->item?->code ? "({$usage->item->code})" : '')),
+                'qty' => (float) $usage->quantity, 'gross' => (int) $usage->total_price] + $part($usage->item);
+        }
+        $adjustment = $spare - (int) $visit->inventoryUsage->sum('total_price');
+        if ($adjustment !== 0) {
+            $lines[] = ['type' => 'part', 'description' => 'Spare charge adjustment', 'qty' => 1, 'gross' => $adjustment, 'hsn' => null, 'gst_rate' => $partRate];
         }
 
         return $lines;
+    }
+
+    /**
+     * What the job's bill comes to if this visit closes with these charges, before anything is saved, so the
+     * technician sees any GST added on top before collecting. Same lines and rounding as the bill itself.
+     * An existing bill keeps its own GST / non-GST and inclusive / exclusive; a new one takes the choices
+     * given, else Settings → GST.
+     *
+     * @return array{is_gst: bool, prices_include_gst: bool, visit_charges: int, visit_tax: int, total: int, tax: int, paid: int, due: int}
+     */
+    public function previewForVisit(JobVisit $visit, int $labour, ?int $spare, ?bool $isGst, ?bool $pricesIncludeGst): array
+    {
+        $tenant = Tenant::findOrFail($visit->tenant_id);
+        $visit->loadMissing(['actionTaken', 'inventoryUsage.item', 'job']);
+        $job = $visit->job;
+        $invoice = Invoice::where('job_id', $job->id)->first();
+        $spare ??= (int) $visit->inventoryUsage->sum('total_price');
+
+        $gst = (bool) $tenant->gstin && ($invoice ? (bool) $invoice->is_gst : ($isGst ?? $this->startsAsGst($tenant, 'job_bills')));
+        $inclusive = $invoice ? $invoice->prices_include_gst !== false : ($pricesIncludeGst ?? $this->jobPricesIncludeGst($tenant));
+        $discount = (int) ($invoice?->discount_amount ?? 0);
+        $earlier = $this->jobLines($job, $tenant, $visit->id);
+        $lines = [...$earlier, ...$this->visitLines($visit, $tenant, $labour, $spare)];
+
+        $total = (int) array_sum(array_column($lines, 'gross')) - $discount;
+        $tax = 0;
+        $visitTax = 0;
+        if ($gst && $lines) {
+            $customer = Customer::withTrashed()->find($job->customer_id);
+            $ours = IndianStates::resolve($tenant->gstin, $tenant->state);
+            $theirs = IndianStates::resolve($customer?->gstin, $customer?->state);
+            $b = Gst::breakup($lines, $discount, $ours && $theirs && $ours !== $theirs, $inclusive);
+            $total = $b['totals']['total'];
+            $tax = $b['totals']['tax'];
+            $visitTax = (int) array_sum(array_column(array_slice($b['lines'], count($earlier)), 'tax'));
+        }
+        $paid = (int) ($invoice?->paid_amount ?? 0);
+
+        return [
+            'is_gst' => $gst,
+            'prices_include_gst' => $inclusive,
+            'visit_charges' => $labour + $spare,
+            'visit_tax' => $visitTax,
+            'total' => $total,
+            'tax' => $tax,
+            'paid' => $paid,
+            'due' => max(0, $total - $paid),
+        ];
     }
 
     public function payLink(Invoice $invoice): string
