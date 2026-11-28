@@ -202,20 +202,25 @@ class ServiceJob extends Model
         $compact = preg_replace('/[\s\-\/._]+/', '', $term);
         $bare = fn (string $column) => "REPLACE(REPLACE(REPLACE(REPLACE({$column}, '-', ''), ' ', ''), '/', ''), '.', '') LIKE ?";
 
-        return $query->where(function (Builder $q) use ($like, $compact, $escape, $bare) {
-            $q->where('crm_call_id', 'like', $like)
-                ->when($compact !== '', fn ($w) => $w->orWhereRaw($bare('crm_call_id'), [$escape($compact)]))
-                ->orWhere('product_category', 'like', $like)
-                ->orWhere('customer_satisfaction_code', 'like', $like)
-                ->orWhereHas('customer', fn ($c) => $c->where('phone', 'like', $like)
-                    ->orWhere('alt_phone', 'like', $like)
-                    // The customer's CRM ID: any part of it, with or without separators.
-                    ->orWhere('crm_id', 'like', $like)
-                    ->when($compact !== '', fn ($w) => $w->orWhereRaw($bare('crm_id'), [$escape($compact)]))
-                    ->orWhere('name', 'like', $like))
-                ->orWhereHas('customerProduct', fn ($p) => $p->where('serial_no', 'like', $like)
-                    ->orWhere('outdoor_serial_no', 'like', $like)
-                    ->orWhere('model_no', 'like', $like));
+        // Customers and units are matched in sub-queries the database runs once (IN), rather than once per job
+        // row (whereHas → correlated EXISTS), which is what makes searching a large job list slow.
+        $customers = Customer::withTrashed()->select('id')->where(fn ($c) => $c->where('phone', 'like', $like)
+            ->orWhere('alt_phone', 'like', $like)
+            // The customer's CRM ID: any part of it, with or without separators.
+            ->orWhere('crm_id', 'like', $like)
+            ->when($compact !== '', fn ($w) => $w->orWhereRaw($bare('crm_id'), [$escape($compact)]))
+            ->orWhere('name', 'like', $like));
+        $units = CustomerProduct::query()->select('id')->where(fn ($p) => $p->where('serial_no', 'like', $like)
+            ->orWhere('outdoor_serial_no', 'like', $like)
+            ->orWhere('model_no', 'like', $like));
+
+        return $query->where(function (Builder $q) use ($like, $compact, $escape, $bare, $customers, $units) {
+            $q->where($q->qualifyColumn('crm_call_id'), 'like', $like)
+                ->when($compact !== '', fn ($w) => $w->orWhereRaw($bare($q->qualifyColumn('crm_call_id')), [$escape($compact)]))
+                ->orWhere($q->qualifyColumn('product_category'), 'like', $like)
+                ->orWhere($q->qualifyColumn('customer_satisfaction_code'), 'like', $like)
+                ->orWhereIn($q->qualifyColumn('customer_id'), $customers)
+                ->orWhereIn($q->qualifyColumn('customer_product_id'), $units);
         });
     }
 
