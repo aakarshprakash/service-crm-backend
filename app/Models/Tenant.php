@@ -66,8 +66,8 @@ class Tenant extends Model
         // job_bills / walkin_bills: whether a new bill starts as a GST or non-GST bill. Each bill can still be changed.
         // estimates: how a new estimate starts (gst | non_gst). estimate_prices: whether the rates typed on a GST
         // estimate are before GST, with GST added on top (before_gst), or include it (include_gst).
-        // walkin_prices: the same choice for counter bills (job bills always include GST).
-        'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst', 'estimates' => 'gst', 'estimate_prices' => 'before_gst', 'walkin_prices' => 'include_gst'],
+        // walkin_prices / job_prices: the same choice for counter bills and technicians' job bills (each bill can still be changed).
+        'gst' => ['service_sac' => '998719', 'service_rate' => 18, 'part_rate' => 18, 'job_bills' => 'gst', 'walkin_bills' => 'gst', 'estimates' => 'gst', 'estimate_prices' => 'before_gst', 'walkin_prices' => 'include_gst', 'job_prices' => 'include_gst'],
         // Printed on invoices, for customers paying by bank transfer.
         'bank' => ['account_name' => null, 'bank_name' => null, 'account_no' => null, 'ifsc' => null, 'branch' => null],
         'invoice_template' => 'classic', // classic | modern

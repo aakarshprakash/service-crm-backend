@@ -370,6 +370,58 @@ class NumberingAndBillTypeTest extends TestCase
         $this->assertSame(100000, $invoice->taxable_amount);
     }
 
+    public function test_job_bills_follow_their_own_gst_style_setting_and_the_technicians_choice(): void
+    {
+        $this->registerForGst();
+        $this->putJson('/api/v1/settings/preferences', ['gst' => ['job_prices' => 'before_gst']])->assertOk();
+        $tech = $this->punchIn($this->makeUser($this->tenant, Role::Technician));
+        $customer = $this->makeCustomer($this->tenant, ['phone' => '9812300001']);
+        $first = $this->makeJob($this->tenant, $customer, $tech);
+        $second = $this->makeJob($this->tenant, $customer, $tech);
+        $this->forgetGuards()->actingAsUser($tech);
+        $this->getJson('/api/v1/master/lookups')->assertJsonPath('data.billing.job_prices', 'before_gst');
+
+        // GST on top (Settings): the app is told the exact amount to collect before the money is taken.
+        $visit = $this->postJson("/api/v1/jobs/{$first->id}/visits/start", ['service_type' => 'tele_call'])->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/visits/{$visit}/bill-preview", ['labour_charge' => 100000])->assertOk()
+            ->assertJsonPath('data.prices_include_gst', false)->assertJsonPath('data.visit_tax', 18000)
+            ->assertJsonPath('data.total', 118000)->assertJsonPath('data.due', 118000);
+        $this->postJson("/api/v1/visits/{$visit}/bill-preview", ['labour_charge' => 100000, 'prices_include_gst' => true])
+            ->assertJsonPath('data.total', 100000)->assertJsonPath('data.visit_tax', 15254);
+        $this->postJson("/api/v1/visits/{$visit}/bill-preview", ['labour_charge' => 100000, 'is_gst' => false])
+            ->assertJsonPath('data.total', 100000)->assertJsonPath('data.tax', 0);
+
+        $this->postJson("/api/v1/visits/{$visit}/complete", [
+            'status' => 'pending', 'service_summary' => 'Checked', 'labour_charge' => 100000, 'payment_method' => 'cash', 'amount_collected' => 118000,
+        ])->assertOk();
+        $bill = Invoice::withoutGlobalScopes()->where('job_id', $first->id)->firstOrFail();
+        $this->assertFalse($bill->prices_include_gst);
+        $this->assertSame([118000, 100000, 118000, 0], [$bill->total_amount, $bill->taxable_amount, $bill->paid_amount, $bill->balance_amount]);
+
+        // The technician can switch a new bill back to GST inclusive.
+        $visit = $this->postJson("/api/v1/jobs/{$second->id}/visits/start", ['service_type' => 'tele_call'])->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/visits/{$visit}/complete", [
+            'status' => 'pending', 'service_summary' => 'Checked', 'labour_charge' => 100000, 'payment_method' => 'credit', 'prices_include_gst' => true,
+        ])->assertOk();
+        $bill = Invoice::withoutGlobalScopes()->where('job_id', $second->id)->firstOrFail();
+        $this->assertTrue($bill->prices_include_gst);
+        $this->assertSame([100000, 84746], [$bill->total_amount, $bill->taxable_amount]);
+
+        // A later visit adds to the bill in the bill's own style, whatever is chosen then.
+        $this->forgetGuards()->actingAsUser($this->admin);
+        $this->postJson("/api/v1/jobs/{$first->id}/resume/approve")->assertOk();
+        $this->forgetGuards()->actingAsUser($tech);
+        $visit = $this->postJson("/api/v1/jobs/{$first->id}/visits/start", ['service_type' => 'tele_call'])->assertCreated()->json('data.id');
+        $this->postJson("/api/v1/visits/{$visit}/bill-preview", ['labour_charge' => 50000, 'prices_include_gst' => true])->assertOk()
+            ->assertJsonPath('data.prices_include_gst', false)->assertJsonPath('data.visit_tax', 9000)
+            ->assertJsonPath('data.total', 177000)->assertJsonPath('data.paid', 118000)->assertJsonPath('data.due', 59000);
+
+        // Another technician's visit can't be previewed.
+        $other = $this->punchIn($this->makeUser($this->tenant, Role::Technician));
+        $this->forgetGuards()->actingAsUser($other);
+        $this->postJson("/api/v1/visits/{$visit}/bill-preview", ['labour_charge' => 50000])->assertNotFound();
+    }
+
     public function test_the_invoice_list_filters_by_gst_style(): void
     {
         $this->registerForGst();

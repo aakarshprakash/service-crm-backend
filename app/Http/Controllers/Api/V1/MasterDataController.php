@@ -90,6 +90,8 @@ class MasterDataController extends Controller
                 'gstin_valid' => \App\Support\IndianStates::isValidGstin($tenant->gstin),
                 'walkin_bills' => $tenant->setting('gst.walkin_bills'),
                 'job_bills' => $tenant->setting('gst.job_bills'),
+                // Whether a new job bill's prices include GST or have it added on top (the technician can change it).
+                'job_prices' => $tenant->setting('gst.job_prices', 'include_gst'),
                 // Settings → GST, which a new estimate follows: its rates per line and how it starts.
                 'service_rate' => (float) $tenant->setting('gst.service_rate', 18),
                 'part_rate' => (float) $tenant->setting('gst.part_rate', 18),

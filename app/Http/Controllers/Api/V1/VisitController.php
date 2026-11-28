@@ -10,6 +10,7 @@ use App\Models\JobVoiceNote;
 use App\Models\ServiceJob;
 use App\Models\TechnicianStock;
 use App\Models\TechnicianStockMove;
+use App\Services\InvoiceService;
 use App\Services\JobService;
 use App\Services\VisitService;
 use App\Support\TenantContext;
@@ -256,6 +257,7 @@ class VisitController extends Controller
             'service_summary' => ['required', 'string', 'max:2000', ...($request->input('status') === 'cancelled' ? ['min:10'] : [])],
             'customer_satisfaction_code' => ['nullable', 'string', 'max:50'],
             'is_gst' => ['nullable', 'boolean'],
+            'prices_include_gst' => ['nullable', 'boolean'],
             'assisted_staff_id' => ['nullable', 'integer', Rule::exists('users', 'id')->where('tenant_id', $tenantId)],
             'labour_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
             'spare_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
@@ -290,6 +292,29 @@ class VisitController extends Controller
             'Cache-Control' => 'private, max-age=1800',
             'Content-Security-Policy' => "default-src 'none'",
         ]);
+    }
+
+    /**
+     * What the bill comes to if the visit closes with these charges (nothing is saved), so the app can show
+     * GST added on top and the exact amount to collect before the technician takes the money.
+     */
+    public function billPreview(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'labour_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
+            'spare_charge' => ['nullable', 'integer', 'min:0', 'max:100000000'],
+            'is_gst' => ['nullable', 'boolean'],
+            'prices_include_gst' => ['nullable', 'boolean'],
+        ]);
+        $visit = $this->ownVisit($request, $id);
+
+        return $this->ok(app(InvoiceService::class)->previewForVisit(
+            $visit,
+            (int) ($data['labour_charge'] ?? 0),
+            isset($data['spare_charge']) ? (int) $data['spare_charge'] : null,
+            isset($data['is_gst']) ? (bool) $data['is_gst'] : null,
+            isset($data['prices_include_gst']) ? (bool) $data['prices_include_gst'] : null,
+        ));
     }
 
     private function ownVisit(Request $request, int $id): JobVisit

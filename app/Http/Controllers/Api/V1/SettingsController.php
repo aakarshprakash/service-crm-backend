@@ -138,6 +138,7 @@ class SettingsController extends Controller
             'gst.estimates' => ['sometimes', Rule::in(['gst', 'non_gst'])],
             'gst.estimate_prices' => ['sometimes', Rule::in(['before_gst', 'include_gst'])],
             'gst.walkin_prices' => ['sometimes', Rule::in(['before_gst', 'include_gst'])],
+            'gst.job_prices' => ['sometimes', Rule::in(['before_gst', 'include_gst'])],
             'bank' => ['sometimes', 'array'],
             'bank.account_name' => ['nullable', 'string', 'max:150'],
             'bank.bank_name' => ['nullable', 'string', 'max:100'],
